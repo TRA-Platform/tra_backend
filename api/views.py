@@ -10,7 +10,7 @@ from .models import (
 )
 from .serializers import (
     SrsTemplateSerializer, ProjectSerializer, RequirementSerializer, RequirementCommentSerializer,
-    DevelopmentPlanSerializer, DevelopmentPlanVersionSerializer, MockupSerializer
+    DevelopmentPlanSerializer, DevelopmentPlanVersionSerializer, MockupSerializer, ProjectListSerializer
 )
 from .tasks import (
     generate_requirements_task, export_srs_task, generate_development_plan_task,
@@ -38,6 +38,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if ModeratorPermission().has_permission(self.request, self):
             return Project.objects.all()
         return Project.objects.filter(created_by=u)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ProjectListSerializer
+        return ProjectSerializer
 
     @action(detail=True, methods=["post"])
     def generate_requirements(self, request, pk=None):

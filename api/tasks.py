@@ -39,6 +39,10 @@ def generate_requirements_task(project_id):
         f"OS: {project.operating_system}\n"
         f"TargetUsers: {project.target_users}\n"
         f"PriorityModules: {project.priority_modules}\n"
+        f"Make sure to generate requirements for the above project.\n"
+        f"All requirements should be well defined and structured.\n"
+        f"Also make sure to make requirements cover every aspect of the project.\n"
+        f"Minimum 20 requirements are required.\n"
         "Please produce a JSON with the following structure:\n"
         "{\n"
         "  \"requirements\": [\n"
@@ -50,7 +54,7 @@ def generate_requirements_task(project_id):
         "    },\n"
         "    ...\n"
         "  ],\n"
-        f"{{'requirements': [{{'title': '...', 'description': '...', 'category': '...', 'suggested_status': '...'}}]}}"
+        "}"
     )
     client = GptClient()
     resp, code = client.send_request(prompt=prompt, engine="gpt-4o", is_json=True)

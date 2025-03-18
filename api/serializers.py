@@ -11,9 +11,13 @@ class SrsTemplateSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 class RequirementHistorySerializer(serializers.ModelSerializer):
+    changed_by = serializers.SerializerMethodField()
     class Meta:
         model = RequirementHistory
         fields = "__all__"
+
+    def get_changed_by(self, obj):
+        return obj.changed_by.username
 
 class RequirementCommentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -75,6 +79,19 @@ class ProjectSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data["created_by"] = self.context["request"].user
         return super().create(validated_data)
+
+
+class ProjectListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Project
+        fields = (
+            "id", "created_by", "name", "short_description",
+            "type_of_application", "color_scheme", "language","status",
+            "created_at", "updated_at"
+        )
+        read_only_fields = ("id", "created_by", "created_at", "updated_at")
+
+
 
 class DevelopmentPlanVersionSerializer(serializers.ModelSerializer):
     class Meta:
