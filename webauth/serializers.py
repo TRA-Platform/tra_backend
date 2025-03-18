@@ -4,20 +4,11 @@ from django.contrib.auth.models import User
 from rest_framework.validators import UniqueValidator
 from django.contrib.auth.password_validation import validate_password
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-import time
 from django.contrib.auth import get_user_model
 from django.contrib.auth import authenticate
 
 from rest_framework.authtoken.models import Token
-from webauth.models import AdminMember
-
-
-class TraderChangeSerializer(serializers.Serializer):
-    email = serializers.CharField(required=False, write_only=True)
-    phone = serializers.CharField(required=False, write_only=True)
-    username = serializers.CharField(required=False, write_only=True)
-    telegram = serializers.CharField(required=False, write_only=True)
-
+from webauth.models import AdminMember, ManagerMember, ModeratorMember
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True)
@@ -57,9 +48,21 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
     def get_token(cls, user):
         token = super(MyTokenObtainPairSerializer, cls).get_token(user)
         token['username'] = user.username
+
+        # Default role is "user" (role=1)
         token['role'] = 1
+
+        # If Admin
         if hasattr(user, 'admin'):
             token['role'] = 9
+
+        # If Manager
+        if hasattr(user, 'manager'):
+            token['role'] = 2
+
+        # If Moderator
+        if hasattr(user, 'moderator'):
+            token['role'] = 3
 
         return token
 
@@ -91,7 +94,6 @@ class RegisterSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
             raise serializers.ValidationError({"password": "Password fields didn't match."})
-
         return attrs
 
     def create(self, validated_data):
@@ -99,7 +101,6 @@ class RegisterSerializer(serializers.ModelSerializer):
             username=validated_data['username'],
             email=validated_data['email'],
         )
-
         user.set_password(validated_data['password'])
         user.save()
         return user
@@ -114,34 +115,33 @@ class RegisterAdminSerializer(serializers.ModelSerializer):
     first_name = serializers.CharField(write_only=True, required=True)
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     password2 = serializers.CharField(write_only=True, required=True)
+    controlled_teams = serializers.ListField(
+        child=serializers.IntegerField(),  # Example usage if you have team IDs
+        required=False
+    )
 
     class Meta:
         model = User
-        fields = ('username', 'first_name', 'password', 'password2', 'email')
+        fields = ('username', 'first_name', 'password', 'password2', 'email', 'controlled_teams')
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
             raise serializers.ValidationError({"password": "Password fields didn't match."})
-
         return attrs
 
     def create(self, validated_data):
         with transaction.atomic():
+            teams_data = validated_data.pop('controlled_teams', [])
             user = User.objects.create(
                 first_name=validated_data['first_name'],
                 username=validated_data['username'],
                 email=validated_data['email'],
             )
-
             user.set_password(validated_data['password'])
             user.save()
 
             admin = AdminMember.objects.create(user=user)
             admin.save()
-
-            for team in validated_data['controlled_teams']:
-                team.admins.add(admin)
-
             return user
 
 

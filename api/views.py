@@ -1,87 +1,159 @@
-import logging
 from rest_framework import viewsets, status
 from rest_framework.response import Response
 from rest_framework.decorators import action
-from .models import *
-from .serializers import *
-from .tasks import *
+from rest_framework.permissions import IsAuthenticated
+from django.shortcuts import get_object_or_404
+from webauth.permissions import AdminPermission, ManagerPermission, ModeratorPermission
+from .models import (
+    SrsTemplate, Project, Requirement, RequirementComment,
+    DevelopmentPlan, DevelopmentPlanVersion, Mockup
+)
+from .serializers import (
+    SrsTemplateSerializer, ProjectSerializer, RequirementSerializer, RequirementCommentSerializer,
+    DevelopmentPlanSerializer, DevelopmentPlanVersionSerializer, MockupSerializer
+)
+from .tasks import (
+    generate_requirements_task, export_srs_task, generate_development_plan_task,
+    generate_mockups_task
+)
 
-logger = logging.getLogger(__name__)
+
+class SrsTemplateViewSet(viewsets.ModelViewSet):
+    queryset = SrsTemplate.objects.all()
+    serializer_class = SrsTemplateSerializer
+    permission_classes = [IsAuthenticated, AdminPermission]
 
 
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
+    serializer_class = ProjectSerializer
+    permission_classes = [IsAuthenticated]
 
-    def get_serializer_class(self):
-        if self.action == 'list':
-            return ProjectListSerializer
-        elif self.action == 'create':
-            return ProjectCreateSerializer
-        return ProjectDetailSerializer
+    def get_queryset(self):
+        u = self.request.user
+        if u.is_superuser or AdminPermission().has_permission(self.request, self):
+            return Project.objects.all()
+        if ManagerPermission().has_permission(self.request, self):
+            return Project.objects.all()
+        if ModeratorPermission().has_permission(self.request, self):
+            return Project.objects.all()
+        return Project.objects.filter(created_by=u)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=["post"])
     def generate_requirements(self, request, pk=None):
-        project = self.get_object()
-        try:
-            for category in RequirementCategory.objects.all():
-                generate_requirement_task.delay(project.id, category.id)
-            logger.info(f"Started requirement generation for project {project.id}")
-            return Response({'status': 'Requirements generation started'})
-        except Exception as e:
-            logger.error(f"Error starting requirement generation: {str(e)}")
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        p = self.get_object()
+        generate_requirements_task.delay(str(p.id))
+        return Response({"status": "Generation started"}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=["post"])
+    def export_srs(self, request, pk=None):
+        u = request.user
+        p = self.get_object()
+        fmt = request.data.get("format", "pdf")
+        export_srs_task.delay(
+            str(p.id),
+            created_by=u.id,
+            fmt=fmt
+        )
+        return Response({"status": "Export started"}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=["post"])
+    def generate_plan(self, request, pk=None):
+        p = self.get_object()
+        generate_development_plan_task.delay(str(p.id))
+        return Response({"status": "Plan generation started"}, status=status.HTTP_202_ACCEPTED)
+
+    @action(detail=True, methods=["post"])
+    def generate_mockups(self, request, pk=None):
+        p = self.get_object()
+        generate_mockups_task.delay(str(p.id))
+        return Response({"status": "Mockup generation started"}, status=status.HTTP_202_ACCEPTED)
 
 
 class RequirementViewSet(viewsets.ModelViewSet):
     queryset = Requirement.objects.all()
+    serializer_class = RequirementSerializer
+    permission_classes = [IsAuthenticated]
 
-    def get_serializer_class(self):
-        if self.action == 'list':
-            return RequirementListSerializer
-        elif self.action == 'create':
-            return RequirementCreateSerializer
-        return RequirementDetailSerializer
+    def get_queryset(self):
+        u = self.request.user
+        if u.is_superuser or AdminPermission().has_permission(self.request, self):
+            return Requirement.objects.all()
+        if ManagerPermission().has_permission(self.request, self):
+            return Requirement.objects.all()
+        if ModeratorPermission().has_permission(self.request, self):
+            return Requirement.objects.all()
+        return Requirement.objects.filter(project__created_by=u)
 
-    def perform_create(self, serializer):
-        requirement = serializer.save()
-        logger.info(f"Created new requirement {requirement.id}")
-        RequirementChangeLog.objects.create(
-            requirement=requirement,
-            user=self.request.user,
-            old_value='',
-            new_value=serializer.data
+
+class RequirementCommentViewSet(viewsets.ModelViewSet):
+    queryset = RequirementComment.objects.all()
+    serializer_class = RequirementCommentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        u = self.request.user
+        if u.is_superuser or AdminPermission().has_permission(self.request, self):
+            return RequirementComment.objects.all()
+        if ManagerPermission().has_permission(self.request, self):
+            return RequirementComment.objects.all()
+        if ModeratorPermission().has_permission(self.request, self):
+            return RequirementComment.objects.all()
+        return RequirementComment.objects.filter(requirement__project__created_by=u)
+
+
+class DevelopmentPlanViewSet(viewsets.ModelViewSet):
+    queryset = DevelopmentPlan.objects.all()
+    serializer_class = DevelopmentPlanSerializer
+    permission_classes = [IsAuthenticated, ManagerPermission]
+
+    @action(detail=True, methods=["post"])
+    def new_version(self, request, pk=None):
+        plan = self.get_object()
+        data = request.data
+        dv = plan.versions.order_by("-version_number").first()
+        nv = dv.version_number + 1 if dv else 1
+        obj = DevelopmentPlanVersion.objects.create(
+            plan=plan,
+            version_number=nv,
+            roles_and_hours=data.get("roles_and_hours", ""),
+            estimated_cost=data.get("estimated_cost", 0),
+            notes=data.get("notes", ""),
+            created_by=request.user
         )
+        plan.current_version_number = nv
+        plan.save()
+        s = DevelopmentPlanVersionSerializer(obj)
+        return Response(s.data, status=status.HTTP_201_CREATED)
 
 
-class CommentViewSet(viewsets.ModelViewSet):
-    queryset = Comment.objects.all()
-    serializer_class = CommentSerializer
+class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
+    queryset = DevelopmentPlanVersion.objects.all()
+    serializer_class = DevelopmentPlanVersionSerializer
+    permission_classes = [IsAuthenticated, ManagerPermission]
 
-    def perform_create(self, serializer):
-        comment = serializer.save(author=self.request.user)
-        logger.info(f"User {self.request.user.id} added comment {comment.id}")
+    def get_queryset(self):
+        u = self.request.user
+        if u.is_superuser or AdminPermission().has_permission(self.request, self):
+            return DevelopmentPlanVersion.objects.all()
+        if ManagerPermission().has_permission(self.request, self):
+            return DevelopmentPlanVersion.objects.all()
+        if ModeratorPermission().has_permission(self.request, self):
+            return DevelopmentPlanVersion.objects.all()
+        return DevelopmentPlanVersion.objects.filter(plan__project__created_by=u)
 
 
-class WorkerTaskViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = WorkerTask.objects.all()
+class MockupViewSet(viewsets.ModelViewSet):
+    queryset = Mockup.objects.all()
+    serializer_class = MockupSerializer
+    permission_classes = [IsAuthenticated]
 
-    def get_serializer_class(self):
-        if self.action == 'list':
-            return WorkerTaskListSerializer
-        return WorkerTaskDetailSerializer
-
-    @action(detail=True, methods=['post'])
-    def retry(self, request, pk=None):
-        task = self.get_object()
-        if task.status == WorkerTask.FAILURE:
-            if task.task_type == WorkerTask.GENERATE_REQ:
-                generate_requirement_task.delay(task.project_id, task.requirement.category_id)
-            elif task.task_type == WorkerTask.GENERATE_MOCKUP:
-                generate_mockup_task.delay(task.project_id)
-            elif task.task_type == WorkerTask.PROCESS_SRS:
-                process_srs_template_task.delay(task.project_id)
-            task.status = WorkerTask.PENDING
-            task.save()
-            logger.info(f"Retrying task {task.id}")
-            return Response({'status': 'Task retried'})
-        return Response({'error': 'Task cannot be retried'}, status=status.HTTP_400_BAD_REQUEST)
+    def get_queryset(self):
+        u = self.request.user
+        if u.is_superuser or AdminPermission().has_permission(self.request, self):
+            return Mockup.objects.all()
+        if ManagerPermission().has_permission(self.request, self):
+            return Mockup.objects.all()
+        if ModeratorPermission().has_permission(self.request, self):
+            return Mockup.objects.all()
+        return Mockup.objects.filter(project__created_by=u)

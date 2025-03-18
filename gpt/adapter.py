@@ -33,8 +33,9 @@ class GptClient:
         endpoint = f"{self.base_url}/request/"
         try:
             response = self.session.post(url=endpoint, json=data)
+            logger.error(f"Sent request: {response.text}")
             response.raise_for_status()
-            return response.json()
+            return response.json(), response.status_code
         except json.JSONDecodeError as e:
             return {
                 "error": f"Error decoding JSON: {e}",

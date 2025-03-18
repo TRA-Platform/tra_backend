@@ -79,7 +79,7 @@ TEMPLATES = [
 WSGI_APPLICATION = 'traApp.wsgi.application'
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': datetime.timedelta(minutes=20),
+    'ACCESS_TOKEN_LIFETIME': datetime.timedelta(hours=2),
     'REFRESH_TOKEN_LIFETIME': datetime.timedelta(hours=24)
 }
 

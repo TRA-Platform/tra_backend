@@ -1,82 +1,107 @@
+# admin.py
 from django.contrib import admin
-from .models import *
+from django.contrib import messages
+from .models import (
+    SrsTemplate, Project, Requirement, RequirementHistory,
+    RequirementComment, DevelopmentPlan, DevelopmentPlanVersion, Mockup, SrsExport, SRS_FORMAT_PDF
+)
+from .tasks import (
+    generate_requirements_task, export_srs_task,
+    generate_development_plan_task, generate_mockups_task
+)
 
-class RequirementInline(admin.TabularInline):
-    model = Requirement
-    extra = 0
-    fields = ('title', 'category', 'priority', 'ai_generated')
-    readonly_fields = ('ai_generated',)
 
-class ProjectAdmin(admin.ModelAdmin):
-    list_display = ('name', 'owner', 'status', 'created_at', 'updated_at')
-    list_filter = ('status', 'owner')
-    search_fields = ('name', 'description')
-    raw_id_fields = ('owner', 'template')
-    inlines = [RequirementInline]
-    actions = ['archive_projects']
+@admin.action(description="Generate Requirements via GPT")
+def admin_generate_requirements(modeladmin, request, queryset):
+    for project in queryset:
+        generate_requirements_task.delay(str(project.id))
+        modeladmin.message_user(request, f"Started requirement generation for project '{project.name}'")
 
-    def archive_projects(self, request, queryset):
-        queryset.update(status=Project.ARCHIVED)
-    archive_projects.short_description = "Archive selected projects"
 
-@admin.register(RequirementCategory)
-class RequirementCategoryAdmin(admin.ModelAdmin):
-    list_display = ('name', 'is_custom')
-    list_filter = ('is_custom',)
-    search_fields = ('name',)
+@admin.action(description="Export SRS (PDF)")
+def admin_export_srs(modeladmin, request, queryset):
+    user_request = request.user
+    for project in queryset:
+        export_srs_task.delay(
+            str(project.id),
+            created_by=user_request.id,
+            fmt=SRS_FORMAT_PDF,
+        )
+        modeladmin.message_user(request, f"Started SRS export for project '{project.name}' as PDF")
 
-class CommentInline(admin.TabularInline):
-    model = Comment
-    extra = 0
-    readonly_fields = ('author', 'created_at')
 
-class ChangeLogInline(admin.TabularInline):
-    model = RequirementChangeLog
-    extra = 0
-    readonly_fields = ('user', 'changed_at')
+@admin.action(description="Generate Development Plan via GPT")
+def admin_generate_plan(modeladmin, request, queryset):
+    for project in queryset:
+        generate_development_plan_task.delay(str(project.id))
+        modeladmin.message_user(request, f"Started dev plan generation for project '{project.name}'")
 
-@admin.register(Requirement)
-class RequirementAdmin(admin.ModelAdmin):
-    list_display = ('title', 'project', 'category', 'priority', 'ai_generated')
-    list_filter = ('project', 'category', 'priority', 'ai_generated')
-    search_fields = ('title', 'description')
-    raw_id_fields = ('project',)
-    inlines = [CommentInline, ChangeLogInline]
-    readonly_fields = ('version', 'created_at')
+
+@admin.action(description="Generate Mockups (HTML) for each Requirement")
+def admin_generate_mockups(modeladmin, request, queryset):
+    for project in queryset:
+        generate_mockups_task.delay(str(project.id))
+        modeladmin.message_user(request, f"Started mockup generation for project '{project.name}'")
+
 
 @admin.register(SrsTemplate)
 class SrsTemplateAdmin(admin.ModelAdmin):
-    list_display = ('name', 'is_default', 'owner', 'created_at')
-    list_filter = ('is_default', 'owner')
-    search_fields = ('name', 'content')
-    raw_id_fields = ('owner',)
+    list_display = ("name", "status", "created_at")
+    search_fields = ("name",)
+    list_filter = ("status", "created_at")
 
-@admin.register(ProjectMockup)
-class ProjectMockupAdmin(admin.ModelAdmin):
-    list_display = ('project', 'generated_at', 'modified_at')
-    raw_id_fields = ('project',)
-    readonly_fields = ('html_content',)
 
-class WorkerTaskAdmin(admin.ModelAdmin):
-    list_display = ('task_type', 'status', 'project', 'created_at', 'completed_at')
-    list_filter = ('task_type', 'status', 'project')
-    search_fields = ('project__name', 'error')
-    readonly_fields = ('created_at', 'started_at', 'completed_at')
-    list_editable = ('status',)
-    actions = ['retry_tasks']
-    date_hierarchy = 'created_at'
+@admin.register(Project)
+class ProjectAdmin(admin.ModelAdmin):
+    list_display = ("name", "created_by", "status", "created_at")
+    search_fields = ("name",)
+    list_filter = ("status", "created_at")
+    actions = [admin_generate_requirements, admin_export_srs, admin_generate_plan, admin_generate_mockups]
 
-    def retry_tasks(self, request, queryset):
-        for task in queryset.filter(status=WorkerTask.FAILURE):
-            if task.task_type == WorkerTask.GENERATE_REQ:
-                generate_requirement_task.delay(task.project_id, task.requirement.category_id)
-            elif task.task_type == WorkerTask.GENERATE_MOCKUP:
-                generate_mockup_task.delay(task.project_id)
-            elif task.task_type == WorkerTask.PROCESS_SRS:
-                process_srs_template_task.delay(task.project_id)
-            task.status = WorkerTask.PENDING
-            task.save()
-    retry_tasks.short_description = "Retry selected failed tasks"
 
-admin.site.register(Project, ProjectAdmin)
-admin.site.register(WorkerTask, WorkerTaskAdmin)
+@admin.register(Requirement)
+class RequirementAdmin(admin.ModelAdmin):
+    list_display = ("title", "project", "category", "status", "version_number", "created_at")
+    list_filter = ("category", "status", "created_at")
+    search_fields = ("title", "description")
+
+
+@admin.register(RequirementHistory)
+class RequirementHistoryAdmin(admin.ModelAdmin):
+    list_display = ("requirement", "version_number", "changed_by", "changed_at", "status")
+    list_filter = ("status", "changed_at", "version_number")
+    search_fields = ("title", "description")
+
+
+@admin.register(RequirementComment)
+class RequirementCommentAdmin(admin.ModelAdmin):
+    list_display = ("requirement", "user", "responsible_user", "created_at", "status")
+    list_filter = ("status", "created_at")
+    search_fields = ("text",)
+
+
+@admin.register(DevelopmentPlan)
+class DevelopmentPlanAdmin(admin.ModelAdmin):
+    list_display = ("project", "current_version_number", "status", "created_at")
+    list_filter = ("status", "created_at")
+
+
+@admin.register(DevelopmentPlanVersion)
+class DevelopmentPlanVersionAdmin(admin.ModelAdmin):
+    list_display = ("plan", "version_number", "estimated_cost", "created_at", "status")
+    list_filter = ("status", "created_at", "version_number")
+    search_fields = ("notes",)
+
+
+@admin.register(Mockup)
+class MockupAdmin(admin.ModelAdmin):
+    list_display = ("name", "project", "requirement", "status", "created_at")
+    list_filter = ("status", "created_at")
+    search_fields = ("name", "html_content")
+
+
+@admin.register(SrsExport)
+class SrsExportAdmin(admin.ModelAdmin):
+    list_display = ("project", "fmt", "status", "created_at")
+    list_filter = ("status", "created_at", "project")
+    search_fields = ("content", "fmt")
