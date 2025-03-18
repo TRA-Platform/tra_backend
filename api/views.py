@@ -78,7 +78,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
 class RequirementViewSet(viewsets.ModelViewSet):
     queryset = Requirement.objects.all()
     serializer_class = RequirementSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     def get_queryset(self):
         u = self.request.user
@@ -94,7 +94,7 @@ class RequirementViewSet(viewsets.ModelViewSet):
 class RequirementCommentViewSet(viewsets.ModelViewSet):
     queryset = RequirementComment.objects.all()
     serializer_class = RequirementCommentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     def get_queryset(self):
         u = self.request.user
@@ -110,7 +110,7 @@ class RequirementCommentViewSet(viewsets.ModelViewSet):
 class DevelopmentPlanViewSet(viewsets.ModelViewSet):
     queryset = DevelopmentPlan.objects.all()
     serializer_class = DevelopmentPlanSerializer
-    permission_classes = [IsAuthenticated, ManagerPermission]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     @action(detail=True, methods=["post"])
     def new_version(self, request, pk=None):
@@ -135,7 +135,7 @@ class DevelopmentPlanViewSet(viewsets.ModelViewSet):
 class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
     queryset = DevelopmentPlanVersion.objects.all()
     serializer_class = DevelopmentPlanVersionSerializer
-    permission_classes = [IsAuthenticated, ManagerPermission]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     def get_queryset(self):
         u = self.request.user
@@ -151,7 +151,7 @@ class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
 class MockupViewSet(viewsets.ModelViewSet):
     queryset = Mockup.objects.all()
     serializer_class = MockupSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     def get_queryset(self):
         u = self.request.user
