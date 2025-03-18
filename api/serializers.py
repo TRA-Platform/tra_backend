@@ -1,98 +1,100 @@
 from rest_framework import serializers
-from .models import *
+from django.contrib.auth.models import User
+from .models import (
+    SrsTemplate, Project, Requirement, RequirementHistory,
+    RequirementComment, DevelopmentPlan, DevelopmentPlanVersion, Mockup
+)
 
-
-class ProjectListSerializer(serializers.ModelSerializer):
-    owner = serializers.StringRelatedField()
-    status = serializers.CharField(source='get_status_display')
-
+class SrsTemplateSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Project
-        fields = ['id', 'name', 'owner', 'status', 'created_at']
+        model = SrsTemplate
+        fields = "__all__"
 
-
-class ProjectCreateSerializer(serializers.ModelSerializer):
+class RequirementHistorySerializer(serializers.ModelSerializer):
     class Meta:
-        model = Project
-        fields = ['name', 'description', 'template']
+        model = RequirementHistory
+        fields = "__all__"
 
-
-class ProjectDetailSerializer(serializers.ModelSerializer):
-    owner = serializers.StringRelatedField()
-    template = serializers.StringRelatedField()
-    requirements = serializers.SerializerMethodField()
-
+class RequirementCommentSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Project
-        fields = '__all__'
+        model = RequirementComment
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "user")
 
-    def get_requirements(self, obj):
-        return RequirementListSerializer(obj.requirement_set.all(), many=True).data
+    def create(self, validated_data):
+        validated_data["user"] = self.context["request"].user
+        return super().create(validated_data)
 
-
-class RequirementListSerializer(serializers.ModelSerializer):
-    category = serializers.StringRelatedField()
-    priority = serializers.CharField(source='get_priority_display')
+class RequirementSerializer(serializers.ModelSerializer):
+    history = RequirementHistorySerializer(many=True, read_only=True)
+    comments = RequirementCommentSerializer(many=True, read_only=True)
 
     class Meta:
         model = Requirement
-        fields = ['id', 'title', 'category', 'priority', 'created_at']
+        fields = (
+            "id", "project", "title", "description", "category",
+            "version_number", "status", "created_at", "updated_at",
+            "history", "comments"
+        )
+        read_only_fields = ("id", "version_number", "created_at", "updated_at", "history", "comments")
 
+    def update(self, instance, validated_data):
+        user = self.context["request"].user
+        RequirementHistory.objects.create(
+            requirement=instance,
+            title=instance.title,
+            description=instance.description,
+            category=instance.category,
+            version_number=instance.version_number,
+            changed_by=user,
+            status=instance.status
+        )
+        instance.title = validated_data.get("title", instance.title)
+        instance.description = validated_data.get("description", instance.description)
+        instance.category = validated_data.get("category", instance.category)
+        instance.status = validated_data.get("status", instance.status)
+        instance.version_number += 1
+        instance.save()
+        return instance
 
-class RequirementCreateSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Requirement
-        fields = ['project', 'category', 'title', 'description', 'priority']
-
-
-class RequirementDetailSerializer(serializers.ModelSerializer):
-    project = serializers.StringRelatedField()
-    category = serializers.StringRelatedField()
-    comments = serializers.SerializerMethodField()
-    changelog = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Requirement
-        fields = '__all__'
-
-    def get_comments(self, obj):
-        return CommentSerializer(obj.comment_set.all(), many=True).data
-
-    def get_changelog(self, obj):
-        return ChangeLogSerializer(obj.requirementchangelog_set.all(), many=True).data
-
-
-class CommentSerializer(serializers.ModelSerializer):
-    author = serializers.StringRelatedField()
-
-    class Meta:
-        model = Comment
-        fields = '__all__'
-        read_only_fields = ['author', 'created_at']
-
-
-class ChangeLogSerializer(serializers.ModelSerializer):
-    user = serializers.StringRelatedField()
+class ProjectSerializer(serializers.ModelSerializer):
+    requirements = RequirementSerializer(many=True, read_only=True)
 
     class Meta:
-        model = RequirementChangeLog
-        fields = '__all__'
-        read_only_fields = ['user', 'changed_at']
+        model = Project
+        fields = (
+            "id", "created_by", "name", "short_description", "srs_template",
+            "type_of_application", "color_scheme", "language",
+            "application_description", "target_users", "additional_requirements",
+            "non_functional_requirements", "technology_stack", "operating_system",
+            "priority_modules", "deadline", "preliminary_budget", "status",
+            "created_at", "updated_at", "requirements"
+        )
+        read_only_fields = ("id", "created_by", "created_at", "updated_at", "requirements")
 
+    def create(self, validated_data):
+        validated_data["created_by"] = self.context["request"].user
+        return super().create(validated_data)
 
-class WorkerTaskListSerializer(serializers.ModelSerializer):
-    task_type = serializers.CharField(source='get_task_type_display')
-    status = serializers.CharField(source='get_status_display')
+class DevelopmentPlanVersionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DevelopmentPlanVersion
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "created_by")
+
+class DevelopmentPlanSerializer(serializers.ModelSerializer):
+    versions = DevelopmentPlanVersionSerializer(many=True, read_only=True)
 
     class Meta:
-        model = WorkerTask
-        fields = ['id', 'task_type', 'status', 'created_at', 'completed_at']
+        model = DevelopmentPlan
+        fields = (
+            "id", "project", "current_version_number", "status",
+            "created_at", "updated_at", "versions"
+        )
+        read_only_fields = ("id", "current_version_number", "created_at", "updated_at", "versions")
 
-
-class WorkerTaskDetailSerializer(serializers.ModelSerializer):
-    project = serializers.StringRelatedField()
-    requirement = serializers.StringRelatedField()
-
+class MockupSerializer(serializers.ModelSerializer):
     class Meta:
-        model = WorkerTask
-        fields = '__all__'
+        model = Mockup
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "updated_at")
