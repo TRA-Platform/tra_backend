@@ -5,15 +5,23 @@ from .models import (
     RequirementComment, DevelopmentPlan, DevelopmentPlanVersion, Mockup
 )
 
+
 class SrsTemplateSerializer(serializers.ModelSerializer):
     class Meta:
         model = SrsTemplate
         fields = "__all__"
 
+
 class RequirementHistorySerializer(serializers.ModelSerializer):
+    changed_by = serializers.SerializerMethodField()
+
     class Meta:
         model = RequirementHistory
         fields = "__all__"
+
+    def get_changed_by(self, obj):
+        return obj.changed_by.username
+
 
 class RequirementCommentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -24,6 +32,7 @@ class RequirementCommentSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data["user"] = self.context["request"].user
         return super().create(validated_data)
+
 
 class RequirementSerializer(serializers.ModelSerializer):
     history = RequirementHistorySerializer(many=True, read_only=True)
@@ -57,30 +66,24 @@ class RequirementSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-class ProjectSerializer(serializers.ModelSerializer):
-    requirements = RequirementSerializer(many=True, read_only=True)
 
+class ProjectListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = (
-            "id", "created_by", "name", "short_description", "srs_template",
-            "type_of_application", "color_scheme", "language",
-            "application_description", "target_users", "additional_requirements",
-            "non_functional_requirements", "technology_stack", "operating_system",
-            "priority_modules", "deadline", "preliminary_budget", "status",
-            "created_at", "updated_at", "requirements"
+            "id", "created_by", "name", "short_description",
+            "type_of_application", "color_scheme", "language", "status",
+            "created_at", "updated_at"
         )
-        read_only_fields = ("id", "created_by", "created_at", "updated_at", "requirements")
+        read_only_fields = ("id", "created_by", "created_at", "updated_at")
 
-    def create(self, validated_data):
-        validated_data["created_by"] = self.context["request"].user
-        return super().create(validated_data)
 
 class DevelopmentPlanVersionSerializer(serializers.ModelSerializer):
     class Meta:
         model = DevelopmentPlanVersion
         fields = "__all__"
         read_only_fields = ("id", "created_at", "created_by")
+
 
 class DevelopmentPlanSerializer(serializers.ModelSerializer):
     versions = DevelopmentPlanVersionSerializer(many=True, read_only=True)
@@ -93,8 +96,35 @@ class DevelopmentPlanSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id", "current_version_number", "created_at", "updated_at", "versions")
 
+
 class MockupSerializer(serializers.ModelSerializer):
+    requirement = serializers.SerializerMethodField()
     class Meta:
         model = Mockup
         fields = "__all__"
         read_only_fields = ("id", "created_at", "updated_at")
+
+    def get_requirement(self, obj):
+        return obj.requirement.title if obj.requirement else None
+
+
+class ProjectSerializer(serializers.ModelSerializer):
+    requirements = RequirementSerializer(many=True, read_only=True)
+    mockups = MockupSerializer(many=True, read_only=True)
+    development_plan = DevelopmentPlanSerializer(read_only=True)
+
+    class Meta:
+        model = Project
+        fields = (
+            "id", "created_by", "name", "short_description", "srs_template",
+            "type_of_application", "color_scheme", "language",
+            "application_description", "target_users", "additional_requirements",
+            "non_functional_requirements", "technology_stack", "operating_system",
+            "priority_modules", "deadline", "preliminary_budget", "status",
+            "created_at", "updated_at", "requirements", "mockups", "development_plan"
+        )
+        read_only_fields = ("id", "created_by", "created_at", "updated_at", "requirements")
+
+    def create(self, validated_data):
+        validated_data["created_by"] = self.context["request"].user
+        return super().create(validated_data)

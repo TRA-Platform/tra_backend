@@ -100,7 +100,7 @@ REST_FRAMEWORK = {
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication'
     ],
-    'DATETIME_FORMAT': '%s',
+    'DATETIME_FORMAT': '%s000',
 }
 
 # Database

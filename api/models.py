@@ -8,10 +8,10 @@ STATUS_ARCHIVED = "archived"
 STATUS_COMPLETED = "completed"
 
 STATUS_CHOICES = [
-    (STATUS_DRAFT, "Draft"),
     (STATUS_ACTIVE, "Active"),
-    (STATUS_ARCHIVED, "Archived"),
+    (STATUS_DRAFT, "Draft"),
     (STATUS_COMPLETED, "Completed"),
+    (STATUS_ARCHIVED, "Archived"),
 ]
 
 PROJECT_TYPE_WEBSITE = "website"
@@ -129,6 +129,10 @@ class Requirement(models.Model):
 
     def __str__(self):
         return f"[v{self.version_number}] {self.title} (Project: {self.project.name})"
+
+    class Meta:
+        verbose_name_plural = "Requirements"
+        ordering = ["status", "-created_at"]
 
 
 class RequirementHistory(models.Model):

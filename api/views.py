@@ -10,7 +10,7 @@ from .models import (
 )
 from .serializers import (
     SrsTemplateSerializer, ProjectSerializer, RequirementSerializer, RequirementCommentSerializer,
-    DevelopmentPlanSerializer, DevelopmentPlanVersionSerializer, MockupSerializer
+    DevelopmentPlanSerializer, DevelopmentPlanVersionSerializer, MockupSerializer, ProjectListSerializer
 )
 from .tasks import (
     generate_requirements_task, export_srs_task, generate_development_plan_task,
@@ -38,6 +38,11 @@ class ProjectViewSet(viewsets.ModelViewSet):
         if ModeratorPermission().has_permission(self.request, self):
             return Project.objects.all()
         return Project.objects.filter(created_by=u)
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ProjectListSerializer
+        return ProjectSerializer
 
     @action(detail=True, methods=["post"])
     def generate_requirements(self, request, pk=None):
@@ -73,7 +78,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
 class RequirementViewSet(viewsets.ModelViewSet):
     queryset = Requirement.objects.all()
     serializer_class = RequirementSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     def get_queryset(self):
         u = self.request.user
@@ -89,7 +94,7 @@ class RequirementViewSet(viewsets.ModelViewSet):
 class RequirementCommentViewSet(viewsets.ModelViewSet):
     queryset = RequirementComment.objects.all()
     serializer_class = RequirementCommentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     def get_queryset(self):
         u = self.request.user
@@ -105,7 +110,7 @@ class RequirementCommentViewSet(viewsets.ModelViewSet):
 class DevelopmentPlanViewSet(viewsets.ModelViewSet):
     queryset = DevelopmentPlan.objects.all()
     serializer_class = DevelopmentPlanSerializer
-    permission_classes = [IsAuthenticated, ManagerPermission]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     @action(detail=True, methods=["post"])
     def new_version(self, request, pk=None):
@@ -130,7 +135,7 @@ class DevelopmentPlanViewSet(viewsets.ModelViewSet):
 class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
     queryset = DevelopmentPlanVersion.objects.all()
     serializer_class = DevelopmentPlanVersionSerializer
-    permission_classes = [IsAuthenticated, ManagerPermission]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     def get_queryset(self):
         u = self.request.user
@@ -146,7 +151,7 @@ class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
 class MockupViewSet(viewsets.ModelViewSet):
     queryset = Mockup.objects.all()
     serializer_class = MockupSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ManagerPermission, AdminPermission, ModeratorPermission]
 
     def get_queryset(self):
         u = self.request.user
