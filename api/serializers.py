@@ -13,14 +13,11 @@ class SrsTemplateSerializer(serializers.ModelSerializer):
 
 
 class RequirementHistorySerializer(serializers.ModelSerializer):
-    changed_by = serializers.SerializerMethodField()
 
     class Meta:
         model = RequirementHistory
         fields = "__all__"
 
-    def get_changed_by(self, obj):
-        return obj.changed_by.username
 
 
 class RequirementCommentSerializer(serializers.ModelSerializer):
