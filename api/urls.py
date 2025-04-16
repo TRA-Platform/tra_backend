@@ -3,7 +3,8 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     SrsTemplateViewSet, ProjectViewSet, RequirementViewSet,
     RequirementCommentViewSet, DevelopmentPlanViewSet,
-    DevelopmentPlanVersionViewSet, MockupViewSet
+    DevelopmentPlanVersionViewSet, MockupViewSet, UserStoryViewSet,
+    UserStoryCommentViewSet, UmlDiagramViewSet
 )
 
 router = DefaultRouter()
@@ -14,6 +15,9 @@ router.register("requirement-comments", RequirementCommentViewSet, basename="req
 router.register("development-plans", DevelopmentPlanViewSet, basename="development-plan")
 router.register("development-plan-versions", DevelopmentPlanVersionViewSet, basename="development-plan-version")
 router.register("mockups", MockupViewSet, basename="mockup")
+router.register("user-stories", UserStoryViewSet, basename="user-story")
+router.register("user-story-comments", UserStoryCommentViewSet, basename="user-story-comment")
+router.register("uml-diagrams", UmlDiagramViewSet, basename="uml-diagram")
 
 urlpatterns = [
     path("", include(router.urls)),
