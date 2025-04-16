@@ -78,6 +78,8 @@ def generate_requirements_task(project_id, user_id=None):
         "    ...\n"
         "  ]\n"
         "}"
+        "Язык текста должен совпадать с языком проекта. "
+        "Также каждый нужно написать по ГОСТу"
     )
 
     client = GptClient()
@@ -316,6 +318,7 @@ def generate_development_plan_task(project_id, user_id=None):
         "  ],\n"
         "  \"notes\": \"Detailed explanation of the development approach, timeline considerations, risk factors, etc.\"\n"
         "}"
+        "Язык текста должен совпадать с языком проекта. "
     )
 
     client = GptClient()
@@ -452,6 +455,7 @@ def generate_mockups_task(project_id, user_id=None):
         "    ...\n"
         "  ]\n"
         "}"
+        "Язык текста должен совпадать с языком проекта. "
     )
 
     client = GptClient()
