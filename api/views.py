@@ -25,7 +25,7 @@ from .tasks import (
 class SrsTemplateViewSet(viewsets.ModelViewSet):
     queryset = SrsTemplate.objects.all()
     serializer_class = SrsTemplateSerializer
-    permission_classes = [IsAuthenticated, AdminPermission]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'description', 'tags']
 
@@ -38,7 +38,7 @@ class SrsTemplateViewSet(viewsets.ModelViewSet):
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'short_description', 'type_of_application', 'status']
 
@@ -94,13 +94,15 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def generate_user_stories(self, request, pk=None):
         p = self.get_object()
-        generate_user_stories_task.delay(str(p.id))
+        requirement_id = request.data.get("requirement_id", None)
+        generate_user_stories_task.delay(str(p.id), requirement_id)
         return Response({"status": "User stories generation started"}, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=["post"])
     def generate_uml_diagrams(self, request, pk=None):
         p = self.get_object()
         diagram_type = request.data.get("diagram_type", "class")
+        print(diagram_type)
         generate_uml_diagrams_task.delay(str(p.id), diagram_type=diagram_type)
         return Response({"status": f"{diagram_type.capitalize()} diagram generation started"},
                         status=status.HTTP_202_ACCEPTED)
@@ -109,42 +111,30 @@ class ProjectViewSet(viewsets.ModelViewSet):
 class RequirementViewSet(viewsets.ModelViewSet):
     queryset = Requirement.objects.all()
     serializer_class = RequirementSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['title', 'description', 'category', 'requirement_type', 'status']
 
     def get_queryset(self):
         queryset = Requirement.objects.all()
-
-        # Filter by project ID if provided
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
-
-        # Filter by parent ID if provided
         parent_id = self.request.query_params.get('parent', None)
         if parent_id:
             if parent_id.lower() == 'null':
                 queryset = queryset.filter(parent__isnull=True)
             else:
                 queryset = queryset.filter(parent_id=parent_id)
-
-        # Filter by category if provided
         category = self.request.query_params.get('category', None)
         if category:
             queryset = queryset.filter(category=category)
-
-        # Filter by requirement_type if provided
         req_type = self.request.query_params.get('requirement_type', None)
         if req_type:
             queryset = queryset.filter(requirement_type=req_type)
-
-        # Filter by status if provided
         status_param = self.request.query_params.get('status', None)
         if status_param:
             queryset = queryset.filter(status=status_param)
-
-        # Apply user permissions
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
@@ -169,24 +159,18 @@ class RequirementViewSet(viewsets.ModelViewSet):
 class UserStoryViewSet(viewsets.ModelViewSet):
     queryset = UserStory.objects.all()
     serializer_class = UserStorySerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['role', 'action', 'benefit', 'status']
 
     def get_queryset(self):
         queryset = UserStory.objects.all()
-
-        # Filter by requirement ID if provided
         requirement_id = self.request.query_params.get('requirement', None)
         if requirement_id:
             queryset = queryset.filter(requirement_id=requirement_id)
-
-        # Filter by status if provided
         status_param = self.request.query_params.get('status', None)
         if status_param:
             queryset = queryset.filter(status=status_param)
-
-        # Apply user permissions
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
@@ -211,17 +195,13 @@ class UserStoryViewSet(viewsets.ModelViewSet):
 class UserStoryCommentViewSet(viewsets.ModelViewSet):
     queryset = UserStoryComment.objects.all()
     serializer_class = UserStoryCommentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = UserStoryComment.objects.all()
-
-        # Filter by user story ID if provided
         user_story_id = self.request.query_params.get('user_story', None)
         if user_story_id:
             queryset = queryset.filter(user_story_id=user_story_id)
-
-        # Apply user permissions
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
@@ -234,7 +214,7 @@ class UserStoryCommentViewSet(viewsets.ModelViewSet):
 class RequirementCommentViewSet(viewsets.ModelViewSet):
     queryset = RequirementComment.objects.all()
     serializer_class = RequirementCommentSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         u = self.request.user
@@ -250,17 +230,13 @@ class RequirementCommentViewSet(viewsets.ModelViewSet):
 class DevelopmentPlanViewSet(viewsets.ModelViewSet):
     queryset = DevelopmentPlan.objects.all()
     serializer_class = DevelopmentPlanSerializer
-    permission_classes = [IsAuthenticated, ManagerPermission]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = DevelopmentPlan.objects.all()
-
-        # Filter by project ID if provided
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
-
-        # Apply user permissions
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self)):
@@ -299,17 +275,13 @@ class DevelopmentPlanViewSet(viewsets.ModelViewSet):
 class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
     queryset = DevelopmentPlanVersion.objects.all()
     serializer_class = DevelopmentPlanVersionSerializer
-    permission_classes = [IsAuthenticated, ManagerPermission]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = DevelopmentPlanVersion.objects.all()
-
-        # Filter by plan ID if provided
         plan_id = self.request.query_params.get('plan', None)
         if plan_id:
             queryset = queryset.filter(plan_id=plan_id)
-
-        # Apply user permissions
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self)):
@@ -321,22 +293,16 @@ class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
 class UmlDiagramViewSet(viewsets.ModelViewSet):
     queryset = UmlDiagram.objects.all()
     serializer_class = UmlDiagramSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = UmlDiagram.objects.all()
-
-        # Filter by project ID if provided
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
-
-        # Filter by diagram type if provided
         diagram_type = self.request.query_params.get('diagram_type', None)
         if diagram_type:
             queryset = queryset.filter(diagram_type=diagram_type)
-
-        # Apply user permissions
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
@@ -359,27 +325,19 @@ class UmlDiagramViewSet(viewsets.ModelViewSet):
 class MockupViewSet(viewsets.ModelViewSet):
     queryset = Mockup.objects.all()
     serializer_class = MockupSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission]
+    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = Mockup.objects.all()
-
-        # Filter by project ID if provided
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
-
-        # Filter by requirement ID if provided
         requirement_id = self.request.query_params.get('requirement', None)
         if requirement_id:
             queryset = queryset.filter(requirement_id=requirement_id)
-
-        # Filter by user story ID if provided
         user_story_id = self.request.query_params.get('user_story', None)
         if user_story_id:
             queryset = queryset.filter(user_story_id=user_story_id)
-
-        # Apply user permissions
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or

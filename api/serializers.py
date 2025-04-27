@@ -4,7 +4,7 @@ from .models import (
     SrsTemplate, Project, Requirement, RequirementHistory,
     RequirementComment, DevelopmentPlan, DevelopmentPlanVersion,
     Mockup, MockupHistory, UserStory, UserStoryHistory, UserStoryComment,
-    UmlDiagram
+    UmlDiagram, STATUS_ARCHIVED
 )
 
 
@@ -52,6 +52,7 @@ class UserStoryCommentSerializer(serializers.ModelSerializer):
 class UserStorySerializer(serializers.ModelSerializer):
     history = UserStoryHistorySerializer(many=True, read_only=True)
     comments = UserStoryCommentSerializer(many=True, read_only=True)
+    requirement = serializers.SerializerMethodField()
 
     class Meta:
         model = UserStory
@@ -86,6 +87,9 @@ class UserStorySerializer(serializers.ModelSerializer):
         instance.version_number += 1
         instance.save()
         return instance
+
+    def get_requirement(self, obj):
+        return obj.requirement.title
 
 
 class MockupHistorySerializer(serializers.ModelSerializer):
@@ -163,7 +167,7 @@ class MockupSerializer(serializers.ModelSerializer):
 class RequirementDetailSerializer(serializers.ModelSerializer):
     history = RequirementHistorySerializer(many=True, read_only=True)
     comments = RequirementCommentSerializer(many=True, read_only=True)
-    user_stories = UserStorySerializer(many=True, read_only=True)
+    user_stories = serializers.SerializerMethodField()
     mockups = MockupSerializer(many=True, read_only=True)
     parent = serializers.SerializerMethodField()
     children = serializers.SerializerMethodField()
@@ -177,6 +181,12 @@ class RequirementDetailSerializer(serializers.ModelSerializer):
         )
         read_only_fields = ("id", "version_number", "created_at", "updated_at",
                             "history", "comments", "user_stories", "mockups")
+
+    def get_user_stories(self, obj):
+        user_stories = UserStory.objects.filter(
+            requirement=obj,
+        ).exclude(status=STATUS_ARCHIVED)
+        return UserStorySerializer(user_stories, many=True).data
 
     def get_parent(self, obj):
         if obj.parent:
@@ -269,10 +279,11 @@ class ProjectListSerializer(serializers.ModelSerializer):
 
 class ProjectSerializer(serializers.ModelSerializer):
     created_by = UserSerializer(read_only=True)
-    requirements = RequirementSerializer(many=True, read_only=True)
+    requirements = RequirementDetailSerializer(many=True, read_only=True)
     mockups = MockupSerializer(many=True, read_only=True)
     development_plan = DevelopmentPlanSerializer(read_only=True)
     uml_diagrams = UmlDiagramSerializer(many=True, read_only=True)
+    user_stories = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
@@ -285,7 +296,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "scope", "generation_status", "generation_started_at",
             "generation_completed_at", "generation_error", "status",
             "created_at", "updated_at", "requirements", "mockups",
-            "development_plan", "uml_diagrams"
+            "development_plan", "uml_diagrams", "user_stories"
         )
         read_only_fields = (
             "id", "created_by", "created_at", "updated_at", "requirements",
@@ -296,3 +307,9 @@ class ProjectSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         validated_data["created_by"] = self.context["request"].user
         return super().create(validated_data)
+
+    def get_user_stories(self, obj):
+        user_stories = UserStory.objects.filter(
+            requirement__project=obj,
+        )
+        return UserStorySerializer(user_stories, many=True).data

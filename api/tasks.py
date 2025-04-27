@@ -22,14 +22,6 @@ logger = logging.getLogger(__name__)
 
 @app.task
 def generate_requirements_task(project_id, user_id=None):
-    """
-    Generate requirements for a project using GPT-4o.
-    Records proper history of requirement changes.
-
-    Args:
-        project_id: ID of the project to generate requirements for
-        user_id: Optional user ID that initiated the request (for attribution)
-    """
     logger.error(f"Generating requirements for project {project_id}")
     try:
         project = Project.objects.get(id=project_id)
@@ -76,7 +68,8 @@ def generate_requirements_task(project_id, user_id=None):
         f"7. Include UI/UX requirements if applicable\n"
         f"8. Consider security, performance, and scalability\n"
         f"9. Organize requirements into a hierarchical structure with parent-child relationships\n"
-        f"10. Categorize requirements by type (feature, constraint, quality, etc.)\n\n"
+        f"10. Categorize requirements by type (feature, constraint, quality, etc.)"
+        f"11. Language should be: {project.language}\n\n"
         f"Output requirements as JSON with the following structure:\n"
         "{\n"
         "  \"requirements\": [\n"
@@ -94,7 +87,7 @@ def generate_requirements_task(project_id, user_id=None):
     )
 
     client = GptClient()
-    resp, code = client.send_request(prompt=prompt, engine="gpt-4o", is_json=True)
+    resp, code = client.send_request(prompt=prompt, engine="gpt-4.1", is_json=True)
 
     success = True
 
@@ -137,8 +130,6 @@ def generate_requirements_task(project_id, user_id=None):
             )
 
         current_requirements.update(status=STATUS_ARCHIVED)
-
-        # First pass: create all requirements without parent relationships
         new_requirements = []
         for i, item in enumerate(requirements):
             title = item.get("title", "Untitled")
@@ -172,21 +163,15 @@ def generate_requirements_task(project_id, user_id=None):
             )
 
             new_requirements.append(new_req)
-
-        # Second pass: set parent relationships
         for i, item in enumerate(requirements):
             parent_idx = item.get("parent_id")
             if parent_idx is not None and isinstance(parent_idx, int) and 0 <= parent_idx < len(new_requirements):
-                if parent_idx != i:  # Prevent self-reference
+                if parent_idx != i:
                     new_requirements[i].parent = new_requirements[parent_idx]
                     new_requirements[i].save()
-
-        # Mark project as completed
         project.generation_status = GENERATION_STATUS_COMPLETED
         project.generation_completed_at = timezone.now()
         project.save()
-
-        # Generate user stories for the requirements
         generate_user_stories_task.delay(str(project.id))
 
         return {"created_requirements": [str(req.id) for req in new_requirements], "count": len(new_requirements)}
@@ -201,16 +186,6 @@ def generate_requirements_task(project_id, user_id=None):
 
 @app.task
 def generate_user_stories_task(project_id, requirement_id=None, user_story_id=None, feedback=None, user_id=None):
-    """
-    Generate user stories for requirements in a project.
-
-    Args:
-        project_id: ID of the project
-        requirement_id: Optional ID of a specific requirement to generate stories for
-        user_story_id: Optional ID of a specific user story to regenerate
-        feedback: Optional feedback for regenerating a user story
-        user_id: Optional user ID that initiated the request (for attribution)
-    """
     logger.error(f"Generating user stories for project {project_id}")
     try:
         project = Project.objects.get(id=project_id)
@@ -223,9 +198,7 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
     except ObjectDoesNotExist:
         return {"error": "Project not found"}
 
-    # Determine which requirements to process
     if user_story_id:
-        # Regenerate a specific user story
         try:
             user_story = UserStory.objects.get(id=user_story_id)
             requirement = user_story.requirement
@@ -233,8 +206,6 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
             user_story.generation_status = GENERATION_STATUS_IN_PROGRESS
             user_story.generation_started_at = timezone.now()
             user_story.save()
-
-            # Create history record before modifying
             UserStoryHistory.objects.create(
                 user_story=user_story,
                 role=user_story.role,
@@ -251,7 +222,6 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
         except ObjectDoesNotExist:
             return {"error": "User story not found"}
     elif requirement_id:
-        # Generate user stories for a specific requirement
         try:
             requirement = Requirement.objects.get(id=requirement_id, project_id=project_id)
             requirements_to_process = [requirement]
@@ -259,18 +229,22 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
         except ObjectDoesNotExist:
             return {"error": "Requirement not found"}
     else:
-        # Generate user stories for all active requirements in the project
         requirements_to_process = Requirement.objects.filter(
             project_id=project_id,
             status__in=[STATUS_DRAFT, STATUS_ACTIVE],
-            category=REQUIREMENT_CATEGORY_FUNCTIONAL  # Only generate for functional requirements
+            category=REQUIREMENT_CATEGORY_FUNCTIONAL,
+        )
+        current_user_stories = UserStory.objects.filter(
+            requirement__in=requirements_to_process,
+            status__in=[STATUS_DRAFT, STATUS_ACTIVE]
+        ).update(
+            status=STATUS_ARCHIVED,
         )
         regenerate_story = None
 
     created_stories = []
 
     for requirement in requirements_to_process:
-        # Prepare prompt for generating user stories
         prompt = (
             f"Project: {project.name}\n"
             f"Requirement ID: {requirement.id}\n"
@@ -300,6 +274,7 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
             )
 
         prompt += (
+            f"Language should be: {project.language}\n\n"
             f"\nOutput your user stories as JSON with the following structure:\n"
             "{\n"
             "  \"user_stories\": [\n"
@@ -315,7 +290,7 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
         )
 
         client = GptClient()
-        resp, code = client.send_request(prompt=prompt, engine="gpt-4o", is_json=True)
+        resp, code = client.send_request(prompt=prompt, engine="gpt-4.1", is_json=True)
 
         if "error" in resp:
             if regenerate_story:
@@ -344,8 +319,6 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
                 regenerate_story.generation_completed_at = timezone.now()
                 regenerate_story.save()
             return {"error": "No valid user stories generated", "detail": data}
-
-        # Process generated stories
         for story_data in stories:
             role = story_data.get("role", "")
             action = story_data.get("action", "")
@@ -353,7 +326,6 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
             acceptance_criteria = story_data.get("acceptance_criteria", [])
 
             if regenerate_story:
-                # Update existing user story
                 regenerate_story.role = role
                 regenerate_story.action = action
                 regenerate_story.benefit = benefit
@@ -364,7 +336,6 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
                 regenerate_story.save()
                 created_stories.append(str(regenerate_story.id))
             else:
-                # Create new user story
                 new_story = UserStory.objects.create(
                     requirement=requirement,
                     role=role,
@@ -382,16 +353,7 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
 
 @app.task
 def export_srs_task(project_id, created_by=None, fmt="pdf"):
-    """
-    Export a Software Requirements Specification (SRS) document for a project.
-    Now includes user stories in the export.
-
-    Args:
-        project_id: ID of the project
-        created_by: User ID who initiated the export
-        fmt: Format of the export (pdf, docx, html, md)
-    """
-    logger.error(f"Exporting SRS for project {project_id} in {fmt} format")
+    logger.error(f"Exporting SRS for project {project_id} in {fmt} format (v2)")
     try:
         project = Project.objects.get(id=project_id)
     except ObjectDoesNotExist:
@@ -402,111 +364,97 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
         template_id=project.srs_template_id,
         fmt=fmt,
         created_by_id=created_by,
-        status=STATUS_ACTIVE
+        status=STATUS_ACTIVE,
     )
+    reqs = project.requirements.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
 
-    reqs = project.requirements.filter(
-        status__in=[STATUS_ACTIVE, STATUS_DRAFT]
-    ).order_by('category', 'requirement_type', 'created_at')
+    def h(level: str, text: str) -> str:
+        return f"{level} {text}\n\n"
 
-    content = f"# Software Requirements Specification for {project.name}\n\n"
-    content += f"## 1. Introduction\n\n"
-    content += f"### 1.1 Project Overview\n\n"
-    content += f"{project.short_description}\n\n"
+    content = []
+    published = timezone.now().strftime("%Y-%m-%d")
+    content += [
+        f"# {project.name} Software Requirements Specification\n",
+        "\n",
+        f"**Project:** {project.name}\n",
+        f"**Document:** SRS\n",
+        f"**Author:** {project.owner.get_full_name() if hasattr(project, 'owner') else 'N/A'}\n",
+        f"**Published on:** {published}\n",
+        "\n",
+        "---\n\n",
+    ]
+    toc = [
+        "## Table of Contents\n",
+        "1. [Introduction](#1-introduction)",
+        "2. [Requirements](#2-requirements)",
+        "3. [Verification](#3-verification)",
+        "4. [Supporting information](#4-supporting-information)",
+        "5. [References](#5-references)",
+        "\n\n",
+    ]
+    content += toc
+    content += [h("## 1.", "Introduction")]
 
-    if project.scope:
-        content += f"### 1.2 Project Scope\n\n"
-        content += f"{project.scope}\n\n"
-
-    content += f"### 1.3 Document Purpose\n\n"
-    content += f"This Software Requirements Specification (SRS) document describes the functional and non-functional requirements for the {project.name} project. It is intended to be used by the development team to implement the software system.\n\n"
-
-    content += f"## 2. General Description\n\n"
-    content += f"### 2.1 Product Perspective\n\n"
-    content += f"**Application Type:** {project.type_of_application}\n\n"
-    content += f"**Primary Language:** {project.language}\n\n"
-
-    if project.operating_systems:
-        content += f"**Operating Systems:** {', '.join(project.operating_systems)}\n\n"
-
-    if project.target_users:
-        content += f"### 2.2 User Classes and Characteristics\n\n"
-        content += f"{project.target_users}\n\n"
-
-    if project.technology_stack:
-        content += f"### 2.3 Technology Stack\n\n"
-        content += f"{project.technology_stack}\n\n"
-
-    deadline_info = []
-    if project.deadline_start:
-        deadline_start_str = project.deadline_start.strftime("%Y-%m-%d")
-        deadline_info.append(f"Start: {deadline_start_str}")
-    if project.deadline_end:
-        deadline_end_str = project.deadline_end.strftime("%Y-%m-%d")
-        deadline_info.append(f"End: {deadline_end_str}")
-
-    if deadline_info:
-        content += f"### 2.4 Project Timeline\n\n"
-        content += f"{' | '.join(deadline_info)}\n\n"
-
-    content += f"## 3. Specific Requirements\n\n"
-
-    categories = {
-        REQUIREMENT_CATEGORY_FUNCTIONAL: "Functional Requirements",
-        REQUIREMENT_CATEGORY_NONFUNCTIONAL: "Non-Functional Requirements",
-        REQUIREMENT_CATEGORY_UIUX: "UI/UX Requirements",
-        REQUIREMENT_CATEGORY_OTHER: "Other Requirements"
+    intro_sections = {
+        "1.1": ("Purpose", project.srs_purpose if hasattr(project,
+                                                          "srs_purpose") else "The purpose of this document is to specify the software requirements for the project."),
+        "1.2": ("Scope", project.scope or "TBD"),
+        "1.3": ("Product perspective", project.type_of_application or "TBD"),
+        "1.4": ("Product functions", "Summarised in Section 2 – User Stories"),
+        "1.5": ("User characteristics", project.target_users or "TBD"),
+        "1.6": ("Limitations", project.limitations if hasattr(project, "limitations") else "TBD"),
+        "1.7": ("Assumptions and dependencies", project.assumptions if hasattr(project, "assumptions") else "TBD"),
+        "1.8": ("Definitions", "See glossary"),
+        "1.9": ("Acronyms and abbreviations", "SRS – Software Requirements Specification, ..."),
     }
+    for num, (title, body) in intro_sections.items():
+        content += [h(f"### {num}", title), f"{body}\n\n"]
+    content += [h("## 2.", "Requirements")]
+    content += [h("### 2.1", "External interfaces"), "TBD\n\n"]
+    content += [h("### 2.2", "Functions")]
+    functional_reqs = reqs.filter(category=REQUIREMENT_CATEGORY_FUNCTIONAL)
+    for i, req in enumerate(functional_reqs, 1):
+        content += [f"#### 2.2.{i} {req.title}\n\n"]
+        content += [f"{req.description}\n\n"]
+    nf_sections = [
+        ("Usability requirements", REQUIREMENT_CATEGORY_UIUX),
+        ("Performance requirements", REQUIREMENT_CATEGORY_NONFUNCTIONAL),
+        ("Other requirements", REQUIREMENT_CATEGORY_OTHER),
+    ]
 
-    section_num = 1
-
-    # Group requirements by category
-    for cat, cat_name in categories.items():
-        cat_reqs = list(reqs.filter(category=cat))
-        if not cat_reqs:
+    section_idx = 3
+    for title, cat in nf_sections:
+        sub_reqs = reqs.filter(category=cat)
+        if not sub_reqs:
+            section_idx += 1
             continue
+        content += [h(f"### 2.{section_idx}", title)]
+        for j, req in enumerate(sub_reqs, 1):
+            content += [f"#### 2.{section_idx}.{j} {req.title}\n\n{req.description}\n\n"]
+        section_idx += 1
+    content += [h("## 3.", "Verification"),
+                "Verification tests are tracked in the TESTS document.\n\n"]
+    content += [h("## 4.", "Supporting information"), "TBD\n\n"]
+    content += [h("## 5.", "References"), "[TESTS]: Verification Tests\n\n"]
+    content += ["---\n\n", "### Revision History\n\n",
+                "| Name | Date | Reason | Version |\n|------|------|--------|---------|\n"]
+    content += [
+        f"| {export.created_by.get_full_name() if export.created_by else 'System'} | {published} | Initial export | 1 |\n\n"]
 
-        content += f"### 3.{section_num} {cat_name}\n\n"
-        section_num += 1
-
-        # First, get top-level requirements (no parent)
-        top_level_reqs = [r for r in cat_reqs if r.parent is None]
-
-        # Process each top-level requirement and its children recursively
-        for i, req in enumerate(top_level_reqs, 1):
-            content = _add_requirement_to_srs(content, req, cat_reqs, i, "", cat[:3].upper())
-
-    if project.additional_requirements:
-        content += f"## 4. Additional Requirements\n\n"
-        content += f"{project.additional_requirements}\n\n"
-
-    if project.non_functional_requirements:
-        content += f"## 5. Non-Functional Constraints\n\n"
-        content += f"{project.non_functional_requirements}\n\n"
-
-    if project.priority_modules:
-        content += f"## 6. Priority Modules\n\n"
-        content += f"{project.priority_modules}\n\n"
-
-    export.content = content
+    md_content = "".join(content)
+    export.content = md_content
     export.save()
 
-    return {"success": True, "format": fmt, "export_id": str(export.id)}
+    return {"success": True, "export_id": str(export.id), "format": fmt}
 
 
 def _add_requirement_to_srs(content, requirement, all_reqs, req_num, prefix, cat_prefix):
-    """Helper function to recursively add requirements to the SRS document"""
-    # Create requirement number with prefix
     req_id = f"{prefix}{req_num}"
-
-    # Add the requirement
     content += f"#### REQ-{cat_prefix}-{req_id}: {requirement.title}\n\n"
     content += f"*Status:* {requirement.status}\n\n"
     content += f"*Type:* {requirement.requirement_type}\n\n"
     content += f"*Description:*\n\n{requirement.description}\n\n"
     content += f"*Version:* {requirement.version_number}\n\n"
-
-    # Add user stories if any
     user_stories = requirement.user_stories.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
     if user_stories.exists():
         content += f"*User Stories:*\n\n"
@@ -519,11 +467,8 @@ def _add_requirement_to_srs(content, requirement, all_reqs, req_num, prefix, cat
             content += "\n"
 
     content += "---\n\n"
-
-    # Find and process children
     children = [r for r in all_reqs if r.parent and r.parent.id == requirement.id]
     for i, child in enumerate(children, 1):
-        # Create a new prefix for the child based on the parent's prefix
         child_prefix = f"{req_id}."
         content = _add_requirement_to_srs(content, child, all_reqs, i, child_prefix, cat_prefix)
 
@@ -532,14 +477,6 @@ def _add_requirement_to_srs(content, requirement, all_reqs, req_num, prefix, cat
 
 @app.task
 def generate_development_plan_task(project_id, user_id=None):
-    """
-    Generate a development plan for a project based on its requirements.
-    Now includes UML diagram generation.
-
-    Args:
-        project_id: ID of the project
-        user_id: Optional user ID that initiated the request (for attribution)
-    """
     logger.error(f"Generating development plan for project {project_id}")
     try:
         project = Project.objects.get(id=project_id)
@@ -589,6 +526,7 @@ def generate_development_plan_task(project_id, user_id=None):
         f"6. Consider dependencies between requirements\n"
         f"7. Account for project management overhead\n"
         f"8. Be realistic about timelines and costs\n\n"
+        f"11. Language should be: {project.language}\n\n"
         f"Output your development plan as JSON with the following structure:\n"
         "{\n"
         "  \"roles_hours\": [\n"
@@ -605,7 +543,7 @@ def generate_development_plan_task(project_id, user_id=None):
     )
 
     client = GptClient()
-    resp, code = client.send_request(prompt=prompt, engine="gpt-4o", is_json=True)
+    resp, code = client.send_request(prompt=prompt, engine="gpt-4.1", is_json=True)
 
     if code != 200 or "error" in resp:
         logger.error(' {"error": "Failed to generate development plan", "detail": resp}')
@@ -627,8 +565,6 @@ def generate_development_plan_task(project_id, user_id=None):
         project=project,
         defaults={'status': STATUS_DRAFT, 'current_version_number': 0}
     )
-
-    # Update hourly rates if provided
     hourly_rates = parsed_data.get("hourly_rates", {})
     if hourly_rates:
         plan.hourly_rates = hourly_rates
@@ -669,8 +605,6 @@ def generate_development_plan_task(project_id, user_id=None):
     if plan.status == STATUS_ARCHIVED:
         plan.status = STATUS_DRAFT
     plan.save()
-
-    # Generate UML diagrams
     generate_uml_diagrams_task.delay(project_id, plan_version_id=str(dv.id))
 
     return {
@@ -685,15 +619,6 @@ def generate_development_plan_task(project_id, user_id=None):
 
 @app.task
 def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None, plan_version_id=None):
-    """
-    Generate UML diagrams for a project.
-
-    Args:
-        project_id: ID of the project
-        diagram_type: Type of diagram to generate (class, sequence, activity, etc.)
-        diagram_id: Optional ID of a specific diagram to regenerate
-        plan_version_id: Optional ID of a development plan version to attach the diagram to
-    """
     logger.error(f"Generating {diagram_type} UML diagram for project {project_id}")
     try:
         project = Project.objects.get(id=project_id)
@@ -706,8 +631,6 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             plan_version = DevelopmentPlanVersion.objects.get(id=plan_version_id)
         except ObjectDoesNotExist:
             logger.warning(f"Plan version {plan_version_id} not found")
-
-    # If regenerating an existing diagram
     if diagram_id:
         try:
             diagram = UmlDiagram.objects.get(id=diagram_id)
@@ -717,7 +640,6 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
         except ObjectDoesNotExist:
             return {"error": "Diagram not found"}
     else:
-        # Create new diagram
         diagram = UmlDiagram.objects.create(
             project=project,
             plan_version=plan_version,
@@ -727,11 +649,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             generation_started_at=timezone.now(),
             status=STATUS_DRAFT
         )
-
-    # Get requirements for the project
     reqs = project.requirements.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
-
-    # Prepare requirements data for the prompt
     req_data = []
     for req in reqs:
         req_data.append({
@@ -741,8 +659,6 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             "category": req.category,
             "requirement_type": req.requirement_type
         })
-
-    # Create prompt based on diagram type
     prompt = (
         f"Project Name: {project.name}\n"
         f"Application Type: {project.type_of_application}\n"
@@ -778,6 +694,53 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             "3. Represent the business process or workflow\n"
             "4. Use swim lanes for different actors if appropriate\n"
             "5. Focus on the most important activities\n\n"
+            "Specific PlantUML syntax for Activity Diagrams:\n"
+            "- Use 'start' and 'stop' to mark the beginning and end of the activity flow\n"
+            "- Use ':activity label;' for activities\n"
+            "- Use 'if (condition) then (yes)' and 'else (no)' for decision points\n"
+            "- End if statements with 'endif'\n"
+            "- Use 'fork' and 'fork again' for parallel activities, ending with 'end fork'\n"
+            "- For swim lanes, use 'partition Name {' and close with '}'\n\n"
+            "Example of valid activity diagram syntax:\n"
+            "@startuml\n"
+            "start\n"
+            ":Initialize Process;\n"
+            "if (Data Valid?) then (yes)\n"
+            "  :Process Data;\n"
+            "else (no)\n"
+            "  :Report Error;\n"
+            "endif\n"
+            ":Complete Process;\n"
+            "stop\n"
+            "@enduml\n\n"
+        )
+    elif diagram_type.lower() == "component":
+        prompt += (
+            "Guidelines for Component Diagram:\n"
+            "1. Identify the main components/modules of the system\n"
+            "2. Define interfaces between components\n"
+            "3. Show dependencies between components\n"
+            "4. Group related components\n"
+            "5. Focus on the architecture level view\n\n"
+            "Specific PlantUML syntax for Component Diagrams:\n"
+            "- Define components using [ComponentName] or component syntax\n"
+            "- Define interfaces using () or interface syntax\n"
+            "- Connect components using --> notation\n"
+            "- Use package to group related components\n\n"
+            "Example of valid component diagram syntax:\n"
+            "@startuml\n"
+            "package \"Frontend\" {\n"
+            "  [Web UI]\n"
+            "  [Mobile App]\n"
+            "}\n"
+            "package \"Backend\" {\n"
+            "  [API Server]\n"
+            "  [Database]\n"
+            "}\n"
+            "[Web UI] --> [API Server]\n"
+            "[Mobile App] --> [API Server]\n"
+            "[API Server] --> [Database]\n"
+            "@enduml\n\n"
         )
     else:
         prompt += (
@@ -790,11 +753,12 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
     prompt += (
         "Output in PlantUML code format, which uses simple text notation to create UML diagrams.\n"
         "Provide only the PlantUML code without any explanations or additional text.\n"
+        "ALSO MAKE SURE THE UML CODE IS VALID\n"
         "Start with @startuml and end with @enduml.\n"
     )
 
     client = GptClient()
-    resp, code = client.send_request(prompt=prompt, engine="gpt-4o", is_json=False)
+    resp, code = client.send_request(prompt=prompt, engine="gpt-4.1", is_json=False)
 
     if "error" in resp:
         diagram.generation_status = GENERATION_STATUS_FAILED
@@ -811,15 +775,17 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
         diagram.generation_completed_at = timezone.now()
         diagram.save()
         return {"error": "Invalid UML diagram content", "detail": data}
-
-    # Extract PlantUML code
     plantuml_code = data
+    if plantuml_code.startswith("```plantuml"):
+        plantuml_code = plantuml_code[11:]
+    if plantuml_code.startswith("```"):
+        plantuml_code = plantuml_code[3:]
     if "@startuml" not in plantuml_code:
         plantuml_code = "@startuml\n" + plantuml_code
     if "@enduml" not in plantuml_code:
         plantuml_code += "\n@enduml"
-
-    # Update the diagram
+    if plantuml_code.endswith("```"):
+        plantuml_code = plantuml_code[:-3]
     diagram.content = plantuml_code
     diagram.generation_status = GENERATION_STATUS_COMPLETED
     diagram.generation_completed_at = timezone.now()
@@ -834,31 +800,17 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
 
 @app.task
 def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, mockup_id=None, feedback=None):
-    """
-    Generate HTML mockups for a project's user stories or requirements.
-
-    Args:
-        project_id: ID of the project
-        user_story_id: Optional ID of a specific user story to generate mockups for
-        requirement_id: Optional ID of a specific requirement to generate mockups for
-        mockup_id: Optional ID of a specific mockup to regenerate
-        feedback: Optional feedback for regeneration
-    """
     logger.error(f"Generating mockups for project {project_id}")
     try:
         project = Project.objects.get(id=project_id)
     except ObjectDoesNotExist:
         return {"error": "Project not found"}
-
-    # If regenerating a specific mockup
     if mockup_id:
         try:
             mockup = Mockup.objects.get(id=mockup_id)
             mockup.generation_status = GENERATION_STATUS_IN_PROGRESS
             mockup.generation_started_at = timezone.now()
             mockup.save()
-
-            # Create history record
             MockupHistory.objects.create(
                 mockup=mockup,
                 html_content=mockup.html_content,
@@ -884,8 +836,6 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
             return {"error": "Mockup not found"}
     else:
         regenerate_mockup = None
-
-        # Determine what to generate mockups for
         if user_story_id:
             try:
                 user_story = UserStory.objects.get(id=user_story_id)
@@ -901,13 +851,10 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
             except ObjectDoesNotExist:
                 return {"error": "Requirement not found"}
         else:
-            # Generate for all active user stories
             user_stories = UserStory.objects.filter(
                 requirement__project_id=project_id,
                 status__in=[STATUS_ACTIVE, STATUS_DRAFT]
             )
-
-            # If no user stories, use UI/UX requirements
             if not user_stories.exists():
                 requirements = project.requirements.filter(
                     status__in=[STATUS_ACTIVE, STATUS_DRAFT],
@@ -917,8 +864,6 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                 requirements = []
 
     created_mockups = []
-
-    # Process user stories first
     for user_story in user_stories:
         prompt = _create_mockup_prompt(
             project=project,
@@ -961,8 +906,6 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                 generation_completed_at=timezone.now()
             )
             created_mockups.append(str(mockup.id))
-
-    # Process requirements
     for requirement in requirements:
         prompt = _create_mockup_prompt(
             project=project,
@@ -1013,7 +956,6 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
 
 
 def _create_mockup_prompt(project, user_story, requirement, regenerate_mockup=None, feedback=None):
-    """Helper to create the mockup generation prompt"""
     prompt = (
         f"Project Name: {project.name}\n"
         f"Application Type: {project.type_of_application}\n"
@@ -1071,9 +1013,8 @@ def _create_mockup_prompt(project, user_story, requirement, regenerate_mockup=No
 
 
 def _generate_mockup_from_prompt(prompt):
-    """Helper to generate mockup HTML from a prompt"""
     client = GptClient()
-    resp, code = client.send_request(prompt=prompt, engine="gpt-4o", is_json=True)
+    resp, code = client.send_request(prompt=prompt, engine="gpt-4.1", is_json=True)
 
     if "error" in resp:
         return {"error": "Failed to generate mockup", "detail": resp}
@@ -1089,8 +1030,6 @@ def _generate_mockup_from_prompt(prompt):
 
     if not html_content:
         return {"error": "No HTML content generated", "detail": parsed_data}
-
-    # Clean up HTML content
     html_content = html_content.replace("<script", "<!-- script").replace("</script>", "<!-- /script -->")
     html_content = f"""
         <!DOCTYPE html>
