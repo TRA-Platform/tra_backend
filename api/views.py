@@ -8,7 +8,7 @@ from webauth.permissions import AdminPermission, ManagerPermission, ModeratorPer
 from .models import (
     SrsTemplate, Project, Requirement, RequirementComment,
     DevelopmentPlan, DevelopmentPlanVersion, Mockup, MockupHistory,
-    UserStory, UserStoryComment, UserStoryHistory, UmlDiagram
+    UserStory, UserStoryComment, UserStoryHistory, UmlDiagram, UML_DIAGRAM_TYPE_CHOICES
 )
 from .serializers import (
     SrsTemplateSerializer, ProjectSerializer, RequirementSerializer, RequirementCommentSerializer,
@@ -18,7 +18,7 @@ from .serializers import (
 )
 from .tasks import (
     generate_requirements_task, export_srs_task, generate_development_plan_task,
-    generate_mockups_task, generate_user_stories_task, generate_uml_diagrams_task
+    generate_mockups_task, generate_user_stories_task, generate_uml_diagrams_task, logger
 )
 
 
@@ -101,9 +101,18 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def generate_uml_diagrams(self, request, pk=None):
         p = self.get_object()
-        diagram_type = request.data.get("diagram_type", "class")
-        print(diagram_type)
-        generate_uml_diagrams_task.delay(str(p.id), diagram_type=diagram_type)
+        diagram_type = request.data.get("diagram_type", None)
+        diagram_types = []
+        if diagram_type:
+            diagram_types = [diagram_type]
+        else:
+            diagram_types = [dt[0] for dt in UML_DIAGRAM_TYPE_CHOICES]
+        for diagram_type in diagram_types:
+            if diagram_type not in dict(UML_DIAGRAM_TYPE_CHOICES).keys():
+                return Response({"error": f"Invalid diagram type: {diagram_type}"}, status=status.HTTP_400_BAD_REQUEST)
+        for diagram_type in diagram_types:
+            task_id = generate_uml_diagrams_task.delay(str(p.id), diagram_type=diagram_type)
+            logger.info(f"Started task {task_id} for diagram type {diagram_type} for project {p.id}")
         return Response({"status": f"{diagram_type.capitalize()} diagram generation started"},
                         status=status.HTTP_202_ACCEPTED)
 

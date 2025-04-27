@@ -306,7 +306,11 @@ class ProjectSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data["created_by"] = self.context["request"].user
-        return super().create(validated_data)
+        project = super().create(validated_data)
+        # Trigger requirement generation after project creation
+        from .tasks import generate_requirements_task
+        generate_requirements_task.delay(str(project.id), user_id=str(self.context["request"].user.id))
+        return project
 
     def get_user_stories(self, obj):
         user_stories = UserStory.objects.filter(

@@ -104,6 +104,17 @@ GENERATION_STATUS_CHOICES = [
     (GENERATION_STATUS_FAILED, "Failed"),
 ]
 
+UML_DIAGRAM_TYPE_CLASS = "class"
+UML_DIAGRAM_TYPE_SEQUENCE = "sequence"
+UML_DIAGRAM_TYPE_ACTIVITY = "activity"
+UML_DIAGRAM_TYPE_COMPONENT = "component"
+UML_DIAGRAM_TYPE_CHOICES = [
+    (UML_DIAGRAM_TYPE_CLASS, "Class Diagram"),
+    (UML_DIAGRAM_TYPE_SEQUENCE, "Sequence Diagram"),
+    (UML_DIAGRAM_TYPE_ACTIVITY, "Activity Diagram"),
+    (UML_DIAGRAM_TYPE_COMPONENT, "Component Diagram"),
+]
+
 
 class SrsTemplate(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -200,7 +211,8 @@ class RequirementHistory(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField()
     category = models.CharField(max_length=50)
-    requirement_type = models.CharField(max_length=50, choices=REQUIREMENT_TYPE_CHOICES, default=REQUIREMENT_TYPE_FEATURE)
+    requirement_type = models.CharField(max_length=50, choices=REQUIREMENT_TYPE_CHOICES,
+                                        default=REQUIREMENT_TYPE_FEATURE)
     version_number = models.IntegerField()
     changed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     changed_at = models.DateTimeField(auto_now_add=True)
@@ -326,7 +338,7 @@ class UmlDiagram(models.Model):
     plan_version = models.ForeignKey(DevelopmentPlanVersion, on_delete=models.SET_NULL, null=True, blank=True,
                                      related_name='uml_diagrams')
     name = models.CharField(max_length=200)
-    diagram_type = models.CharField(max_length=50)
+    diagram_type = models.CharField(max_length=50, choices=UML_DIAGRAM_TYPE_CHOICES, default=UML_DIAGRAM_TYPE_CLASS)
     content = models.TextField()
     notes = models.TextField(blank=True)
     generation_status = models.CharField(

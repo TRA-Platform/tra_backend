@@ -12,7 +12,8 @@ from .models import (
     REQUIREMENT_CATEGORY_UIUX, REQUIREMENT_CATEGORY_OTHER, STATUS_DRAFT,
     STATUS_ARCHIVED, STATUS_ACTIVE, GENERATION_STATUS_PENDING,
     GENERATION_STATUS_IN_PROGRESS, GENERATION_STATUS_COMPLETED,
-    GENERATION_STATUS_FAILED
+    GENERATION_STATUS_FAILED, UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY,
+    UML_DIAGRAM_TYPE_COMPONENT
 )
 from gpt.adapter import GptClient
 
@@ -22,13 +23,9 @@ logger = logging.getLogger(__name__)
 
 @app.task
 def generate_requirements_task(project_id, user_id=None):
-    logger.error(f"Generating requirements for project {project_id}")
+    logger.info(f"Generating requirements for project {project_id}")
     try:
         project = Project.objects.get(id=project_id)
-        project.generation_status = GENERATION_STATUS_IN_PROGRESS
-        project.generation_started_at = timezone.now()
-        project.save()
-
         user = None
         if user_id:
             try:
@@ -37,6 +34,10 @@ def generate_requirements_task(project_id, user_id=None):
                 logger.warning(f"User {user_id} not found for attribution")
     except ObjectDoesNotExist:
         return {"error": "Project not found"}
+
+    project.generation_status = GENERATION_STATUS_IN_PROGRESS
+    project.generation_started_at = timezone.now()
+    project.save()
 
     available_categories = "|".join([
         REQUIREMENT_CATEGORY_FUNCTIONAL,
@@ -89,104 +90,77 @@ def generate_requirements_task(project_id, user_id=None):
     client = GptClient()
     resp, code = client.send_request(prompt=prompt, engine="gpt-4.1", is_json=True)
 
-    success = True
+    if code != 200:
+        project.generation_status = GENERATION_STATUS_FAILED
+        project.generation_error = f"Failed to generate requirements: {resp}"
+        project.save()
+        return {"error": f"Failed to generate requirements: {resp}"}
 
-    try:
-        if "error" in resp:
-            project.generation_status = GENERATION_STATUS_FAILED
-            project.generation_error = f"Failed to generate requirements: {resp.get('error', 'Unknown error')}"
-            project.generation_completed_at = timezone.now()
-            project.save()
-            return {"error": "Failed to generate requirements", "detail": resp}
+    requirements = resp.get("requirements", [])
+    if not requirements:
+        project.generation_status = GENERATION_STATUS_FAILED
+        project.generation_error = "No requirements generated"
+        project.save()
+        return {"error": "No requirements generated"}
 
-        data = resp.get("data") or resp.get("answer") or resp
-        parsed_data = json.loads(data) if isinstance(data, str) else data
-        requirements = parsed_data.get("requirements", [])
+    current_requirements = Requirement.objects.filter(project=project)
+    if current_requirements.exists():
+        current_requirements.update(status=STATUS_ARCHIVED)
 
-        if not isinstance(requirements, list) or not requirements:
-            project.generation_status = GENERATION_STATUS_FAILED
-            project.generation_error = "No valid requirements generated"
-            project.generation_completed_at = timezone.now()
-            project.save()
-            return {"error": "No valid requirements generated", "detail": data}
+    new_requirements = []
+    for i, item in enumerate(requirements):
+        title = item.get("title", "Untitled")
+        description = item.get("description", "")
+        category = item.get("category", REQUIREMENT_CATEGORY_FUNCTIONAL)
+        requirement_type = item.get("requirement_type", "feature")
 
-        logger.error(f"Generated {len(requirements)} requirements for project {project_id}")
+        if category not in [REQUIREMENT_CATEGORY_FUNCTIONAL, REQUIREMENT_CATEGORY_NONFUNCTIONAL,
+                            REQUIREMENT_CATEGORY_UIUX, REQUIREMENT_CATEGORY_OTHER]:
+            category = REQUIREMENT_CATEGORY_FUNCTIONAL
 
-        current_requirements = Requirement.objects.filter(
-            project_id=project_id,
-            status__in=[STATUS_DRAFT, STATUS_ACTIVE]
+        new_req = Requirement.objects.create(
+            project=project,
+            title=title,
+            description=description,
+            category=category,
+            requirement_type=requirement_type,
+            status=STATUS_DRAFT,
+            version_number=1
         )
 
-        for req in current_requirements:
-            RequirementHistory.objects.create(
-                requirement=req,
-                title=req.title,
-                description=req.description,
-                category=req.category,
-                requirement_type=req.requirement_type,
-                version_number=req.version_number,
-                changed_by=user,
-                status=req.status,
-            )
+        RequirementHistory.objects.create(
+            requirement=new_req,
+            title=new_req.title,
+            description=new_req.description,
+            category=new_req.category,
+            requirement_type=new_req.requirement_type,
+            version_number=new_req.version_number,
+            changed_by=user,
+            status=new_req.status,
+        )
 
-        current_requirements.update(status=STATUS_ARCHIVED)
-        new_requirements = []
-        for i, item in enumerate(requirements):
-            title = item.get("title", "Untitled")
-            description = item.get("description", "")
-            category = item.get("category", REQUIREMENT_CATEGORY_FUNCTIONAL)
-            requirement_type = item.get("requirement_type", "feature")
+        new_requirements.append(new_req)
 
-            if category not in [REQUIREMENT_CATEGORY_FUNCTIONAL, REQUIREMENT_CATEGORY_NONFUNCTIONAL,
-                                REQUIREMENT_CATEGORY_UIUX, REQUIREMENT_CATEGORY_OTHER]:
-                category = REQUIREMENT_CATEGORY_FUNCTIONAL
+    for i, item in enumerate(requirements):
+        parent_idx = item.get("parent_id")
+        if parent_idx is not None and isinstance(parent_idx, int) and 0 <= parent_idx < len(new_requirements):
+            if parent_idx != i:
+                new_requirements[i].parent = new_requirements[parent_idx]
+                new_requirements[i].save()
 
-            new_req = Requirement.objects.create(
-                project=project,
-                title=title,
-                description=description,
-                category=category,
-                requirement_type=requirement_type,
-                status=STATUS_DRAFT,
-                version_number=1
-            )
+    project.generation_status = GENERATION_STATUS_COMPLETED
+    project.generation_completed_at = timezone.now()
+    project.save()
 
-            RequirementHistory.objects.create(
-                requirement=new_req,
-                title=new_req.title,
-                description=new_req.description,
-                category=new_req.category,
-                requirement_type=new_req.requirement_type,
-                version_number=new_req.version_number,
-                changed_by=user,
-                status=new_req.status,
-            )
-
-            new_requirements.append(new_req)
-        for i, item in enumerate(requirements):
-            parent_idx = item.get("parent_id")
-            if parent_idx is not None and isinstance(parent_idx, int) and 0 <= parent_idx < len(new_requirements):
-                if parent_idx != i:
-                    new_requirements[i].parent = new_requirements[parent_idx]
-                    new_requirements[i].save()
-        project.generation_status = GENERATION_STATUS_COMPLETED
-        project.generation_completed_at = timezone.now()
-        project.save()
-        generate_user_stories_task.delay(str(project.id))
-
-        return {"created_requirements": [str(req.id) for req in new_requirements], "count": len(new_requirements)}
-    except Exception as e:
-        logger.error(f"Error generating requirements: {str(e)}")
-        project.generation_status = GENERATION_STATUS_FAILED
-        project.generation_error = str(e)
-        project.generation_completed_at = timezone.now()
-        project.save()
-        return {"error": f"Error generating requirements: {str(e)}"}
+    # Chain user stories generation
+    generate_user_stories_task.delay(str(project.id), user_id=str(user.id) if user else None)
+    
+    return {"success": True, "requirements_count": len(new_requirements)}
 
 
 @app.task
 def generate_user_stories_task(project_id, requirement_id=None, user_story_id=None, feedback=None, user_id=None):
-    logger.error(f"Generating user stories for project {project_id}")
+    logger.info(f"Generating user stories for project {project_id}")
     try:
         project = Project.objects.get(id=project_id)
         user = None
@@ -292,33 +266,21 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
         client = GptClient()
         resp, code = client.send_request(prompt=prompt, engine="gpt-4.1", is_json=True)
 
-        if "error" in resp:
+        if code != 200:
             if regenerate_story:
                 regenerate_story.generation_status = GENERATION_STATUS_FAILED
-                regenerate_story.generation_error = f"Failed to regenerate user story: {resp.get('error', 'Unknown error')}"
-                regenerate_story.generation_completed_at = timezone.now()
+                regenerate_story.generation_error = f"Failed to generate user story: {resp}"
                 regenerate_story.save()
-            return {"error": "Failed to generate user stories", "detail": resp}
+            return {"error": f"Failed to generate user stories: {resp}"}
 
-        data = resp.get("data") or resp.get("answer") or resp
-        try:
-            parsed_data = json.loads(data) if isinstance(data, str) else data
-            stories = parsed_data.get("user_stories", [])
-        except (json.JSONDecodeError, AttributeError):
+        stories = resp.get("user_stories", [])
+        if not stories:
             if regenerate_story:
                 regenerate_story.generation_status = GENERATION_STATUS_FAILED
-                regenerate_story.generation_error = "Invalid response format from GPT"
-                regenerate_story.generation_completed_at = timezone.now()
+                regenerate_story.generation_error = "No user stories generated"
                 regenerate_story.save()
-            return {"error": "Invalid response format from GPT", "detail": data}
+            return {"error": "No user stories generated"}
 
-        if not isinstance(stories, list) or not stories:
-            if regenerate_story:
-                regenerate_story.generation_status = GENERATION_STATUS_FAILED
-                regenerate_story.generation_error = "No valid user stories generated"
-                regenerate_story.generation_completed_at = timezone.now()
-                regenerate_story.save()
-            return {"error": "No valid user stories generated", "detail": data}
         for story_data in stories:
             role = story_data.get("role", "")
             action = story_data.get("action", "")
@@ -348,7 +310,12 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
                 )
                 created_stories.append(str(new_story.id))
 
-    return {"created_user_stories": created_stories, "count": len(created_stories)}
+    # If this was a full project generation (not just for one requirement or story),
+    # chain the development plan generation
+    if not requirement_id and not user_story_id:
+        generate_development_plan_task.delay(str(project.id), user_id=str(user.id) if user else None)
+
+    return {"success": True, "created_user_stories": created_stories, "count": len(created_stories)}
 
 
 @app.task
@@ -477,7 +444,7 @@ def _add_requirement_to_srs(content, requirement, all_reqs, req_num, prefix, cat
 
 @app.task
 def generate_development_plan_task(project_id, user_id=None):
-    logger.error(f"Generating development plan for project {project_id}")
+    logger.info(f"Generating development plan for project {project_id}")
     try:
         project = Project.objects.get(id=project_id)
         user = None
@@ -537,47 +504,31 @@ def generate_development_plan_task(project_id, user_id=None):
         "    },\n"
         "    ...\n"
         "  ],\n"
-        "  \"hourly_rates\": {\"Role title\": hourly rate, ...},\n"
-        "  \"notes\": \"Detailed explanation of the development approach, timeline considerations, risk factors, etc.\"\n"
+        "  \"notes\": \"Additional notes or considerations\"\n"
         "}"
     )
 
     client = GptClient()
     resp, code = client.send_request(prompt=prompt, engine="gpt-4.1", is_json=True)
 
-    if code != 200 or "error" in resp:
-        logger.error(' {"error": "Failed to generate development plan", "detail": resp}')
-        return {"error": "Failed to generate development plan", "detail": resp}
+    if code != 200:
+        return {"error": f"Failed to generate development plan: {resp}"}
 
-    data = resp.get("data") or resp.get("answer") or resp
-    try:
-        parsed_data = json.loads(data) if isinstance(data, str) else data
-    except (json.JSONDecodeError, AttributeError):
-        logger.error(' {"error": "Invalid response format from GPT", "detail": data}')
-        return {"error": "Invalid response format from GPT", "detail": data}
+    roles_hours = resp.get("roles_hours", [])
+    notes = resp.get("notes", "")
 
-    if not isinstance(parsed_data, dict):
-        logger.error(' {"error": "Invalid plan format", "detail": data}')
-        return {"error": "Invalid plan format", "detail": data}
+    if not roles_hours:
+        return {"error": "No roles and hours generated"}
 
-    logger.error(f"Generated development plan for project {project_id}")
-    plan, created = DevelopmentPlan.objects.get_or_create(
-        project=project,
-        defaults={'status': STATUS_DRAFT, 'current_version_number': 0}
-    )
-    hourly_rates = parsed_data.get("hourly_rates", {})
-    if hourly_rates:
-        plan.hourly_rates = hourly_rates
-        plan.save()
-
-    last = plan.versions.order_by("-version_number").first()
-    next_version = last.version_number + 1 if last else 1
-
-    roles_hours = parsed_data.get("roles_hours", [])
-    notes = parsed_data.get("notes", "")
-    total_cost = 0
+    plan, created = DevelopmentPlan.objects.get_or_create(project=project)
+    if not created:
+        next_version = plan.current_version_number + 1
+    else:
+        next_version = 1
 
     formatted_roles_hours = []
+    total_cost = 0
+
     for item in roles_hours:
         role = item.get("role", "")
         hours = float(item.get("hours", 0))
@@ -605,7 +556,10 @@ def generate_development_plan_task(project_id, user_id=None):
     if plan.status == STATUS_ARCHIVED:
         plan.status = STATUS_DRAFT
     plan.save()
-    generate_uml_diagrams_task.delay(project_id, plan_version_id=str(dv.id))
+
+    # Chain UML diagrams generation for all diagram types
+    for diagram_type in [UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY, UML_DIAGRAM_TYPE_COMPONENT]:
+        generate_uml_diagrams_task.delay(str(project.id), diagram_type=diagram_type, plan_version_id=str(dv.id))
 
     return {
         "success": True,
@@ -667,7 +621,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
         f"Task: Create a {diagram_type} UML diagram for this project based on the requirements.\n\n"
     )
 
-    if diagram_type.lower() == "class":
+    if diagram_type.lower() == UML_DIAGRAM_TYPE_CLASS:
         prompt += (
             "Guidelines for Class Diagram:\n"
             "1. Identify the main classes in the system\n"
@@ -677,7 +631,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             "5. Focus on the most important classes and relationships\n"
             "6. Consider design patterns where appropriate\n\n"
         )
-    elif diagram_type.lower() == "sequence":
+    elif diagram_type.lower() == UML_DIAGRAM_TYPE_SEQUENCE:
         prompt += (
             "Guidelines for Sequence Diagram:\n"
             "1. Identify the main actors and objects\n"
@@ -686,7 +640,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             "4. Show the timeline of events from top to bottom\n"
             "5. Focus on the most important interactions\n\n"
         )
-    elif diagram_type.lower() == "activity":
+    elif diagram_type.lower() == UML_DIAGRAM_TYPE_ACTIVITY:
         prompt += (
             "Guidelines for Activity Diagram:\n"
             "1. Show the flow of activities from start to finish\n"
@@ -714,7 +668,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             "stop\n"
             "@enduml\n\n"
         )
-    elif diagram_type.lower() == "component":
+    elif diagram_type.lower() == UML_DIAGRAM_TYPE_COMPONENT:
         prompt += (
             "Guidelines for Component Diagram:\n"
             "1. Identify the main components/modules of the system\n"
