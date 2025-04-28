@@ -102,7 +102,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def generate_uml_diagrams(self, request, pk=None):
         p = self.get_object()
         diagram_type = request.data.get("diagram_type", None)
-        diagram_types = []
         if diagram_type:
             diagram_types = [diagram_type]
         else:
