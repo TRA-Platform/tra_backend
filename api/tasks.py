@@ -13,7 +13,8 @@ from .models import (
     STATUS_ARCHIVED, STATUS_ACTIVE, GENERATION_STATUS_PENDING,
     GENERATION_STATUS_IN_PROGRESS, GENERATION_STATUS_COMPLETED,
     GENERATION_STATUS_FAILED, UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY,
-    UML_DIAGRAM_TYPE_COMPONENT
+    UML_DIAGRAM_TYPE_COMPONENT, PROJECT_TYPE_API, PROJECT_TYPE_MOBILE, PROJECT_TYPE_WEBSITE, PROJECT_TYPE_DESKTOP,
+    PROJECT_TYPE_OTHER, RequirementComment, REQUIREMENT_TYPE_PERFORMANCE, REQUIREMENT_TYPE_SECURITY
 )
 from gpt.adapter import GptClient
 
@@ -108,6 +109,13 @@ def generate_requirements_task(project_id, user_id=None):
         if current_requirements.exists():
             current_requirements.update(status=STATUS_ARCHIVED)
 
+        category_counters = {
+            REQUIREMENT_CATEGORY_FUNCTIONAL: 1,
+            REQUIREMENT_CATEGORY_NONFUNCTIONAL: 1,
+            REQUIREMENT_CATEGORY_UIUX: 1,
+            REQUIREMENT_CATEGORY_OTHER: 1
+        }
+
         new_requirements = []
         for i, item in enumerate(requirements):
             title = item.get("title", "Untitled")
@@ -119,9 +127,20 @@ def generate_requirements_task(project_id, user_id=None):
                                 REQUIREMENT_CATEGORY_UIUX, REQUIREMENT_CATEGORY_OTHER]:
                 category = REQUIREMENT_CATEGORY_FUNCTIONAL
 
+            category_prefix = {
+                REQUIREMENT_CATEGORY_FUNCTIONAL: "FUN",
+                REQUIREMENT_CATEGORY_NONFUNCTIONAL: "NF",
+                REQUIREMENT_CATEGORY_UIUX: "UI",
+                REQUIREMENT_CATEGORY_OTHER: "OTH"
+            }.get(category, "FUN")
+
+            handle = f"REQ-{category_prefix}-{category_counters[category]}"
+            category_counters[category] += 1
+
             new_req = Requirement.objects.create(
                 project=project,
                 title=title,
+                handle=handle,
                 description=description,
                 category=category,
                 requirement_type=requirement_type,
@@ -153,8 +172,8 @@ def generate_requirements_task(project_id, user_id=None):
         project.generation_completed_at = timezone.now()
         project.save()
 
+        # Chain user stories generation
         generate_user_stories_task.delay(str(project.id), user_id=str(user.id) if user else None)
-        generate_development_plan_task.delay(str(project.id), user_id=str(user.id) if user else None)
         
         return {"success": True, "requirements_count": len(new_requirements)}
     except Exception as e:
@@ -335,127 +354,460 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
 
 @app.task
 def export_srs_task(project_id, created_by=None, fmt="pdf"):
-    logger.error(f"Exporting SRS for project {project_id} in {fmt} format (v2)")
+    logger.info(f"Exporting SRS for project {project_id} in {fmt} format (enhanced version)")
     try:
         project = Project.objects.get(id=project_id)
+        creator = User.objects.get(id=created_by) if created_by else None
     except ObjectDoesNotExist:
         return {"error": "Project not found"}
 
     export = SrsExport.objects.create(
         project=project,
-        template_id=project.srs_template_id,
+        template=project.srs_template,
         fmt=fmt,
-        created_by_id=created_by,
+        created_by=creator,
         status=STATUS_ACTIVE,
     )
-    reqs = project.requirements.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
-
-    def h(level: str, text: str) -> str:
-        return f"{level} {text}\n\n"
-
-    content = []
-    published = timezone.now().strftime("%Y-%m-%d")
-    content += [
-        f"# {project.name} Software Requirements Specification\n",
-        "\n",
-        f"**Project:** {project.name}\n",
-        f"**Document:** SRS\n",
-        f"**Author:** {project.owner.get_full_name() if hasattr(project, 'owner') else 'N/A'}\n",
-        f"**Published on:** {published}\n",
-        "\n",
-        "---\n\n",
-    ]
-    toc = [
-        "## Table of Contents\n",
-        "1. [Introduction](#1-introduction)",
-        "2. [Requirements](#2-requirements)",
-        "3. [Verification](#3-verification)",
-        "4. [Supporting information](#4-supporting-information)",
-        "5. [References](#5-references)",
-        "\n\n",
-    ]
-    content += toc
-    content += [h("## 1.", "Introduction")]
-
-    intro_sections = {
-        "1.1": ("Purpose", project.srs_purpose if hasattr(project,
-                                                          "srs_purpose") else "The purpose of this document is to specify the software requirements for the project."),
-        "1.2": ("Scope", project.scope or "TBD"),
-        "1.3": ("Product perspective", project.type_of_application or "TBD"),
-        "1.4": ("Product functions", "Summarised in Section 2 – User Stories"),
-        "1.5": ("User characteristics", project.target_users or "TBD"),
-        "1.6": ("Limitations", project.limitations if hasattr(project, "limitations") else "TBD"),
-        "1.7": ("Assumptions and dependencies", project.assumptions if hasattr(project, "assumptions") else "TBD"),
-        "1.8": ("Definitions", "See glossary"),
-        "1.9": ("Acronyms and abbreviations", "SRS – Software Requirements Specification, ..."),
-    }
-    for num, (title, body) in intro_sections.items():
-        content += [h(f"### {num}", title), f"{body}\n\n"]
-    content += [h("## 2.", "Requirements")]
-    content += [h("### 2.1", "External interfaces"), "TBD\n\n"]
-    content += [h("### 2.2", "Functions")]
-    functional_reqs = reqs.filter(category=REQUIREMENT_CATEGORY_FUNCTIONAL)
-    for i, req in enumerate(functional_reqs, 1):
-        content += [f"#### 2.2.{i} {req.title}\n\n"]
-        content += [f"{req.description}\n\n"]
-    nf_sections = [
-        ("Usability requirements", REQUIREMENT_CATEGORY_UIUX),
-        ("Performance requirements", REQUIREMENT_CATEGORY_NONFUNCTIONAL),
-        ("Other requirements", REQUIREMENT_CATEGORY_OTHER),
-    ]
-
-    section_idx = 3
-    for title, cat in nf_sections:
-        sub_reqs = reqs.filter(category=cat)
-        if not sub_reqs:
-            section_idx += 1
-            continue
-        content += [h(f"### 2.{section_idx}", title)]
-        for j, req in enumerate(sub_reqs, 1):
-            content += [f"#### 2.{section_idx}.{j} {req.title}\n\n{req.description}\n\n"]
-        section_idx += 1
-    content += [h("## 3.", "Verification"),
-                "Verification tests are tracked in the TESTS document.\n\n"]
-    content += [h("## 4.", "Supporting information"), "TBD\n\n"]
-    content += [h("## 5.", "References"), "[TESTS]: Verification Tests\n\n"]
-    content += ["---\n\n", "### Revision History\n\n",
-                "| Name | Date | Reason | Version |\n|------|------|--------|---------|\n"]
-    content += [
-        f"| {export.created_by.get_full_name() if export.created_by else 'System'} | {published} | Initial export | 1 |\n\n"]
-
-    md_content = "".join(content)
-    export.content = md_content
+    requirements = project.requirements.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
+    content = generate_srs_document(project, requirements, creator)
+    export.content = content
     export.save()
 
     return {"success": True, "export_id": str(export.id), "format": fmt}
 
 
-def _add_requirement_to_srs(content, requirement, all_reqs, req_num, prefix, cat_prefix):
-    req_id = f"{prefix}{req_num}"
-    content += f"#### REQ-{cat_prefix}-{req_id}: {requirement.title}\n\n"
-    content += f"*Status:* {requirement.status}\n\n"
-    content += f"*Type:* {requirement.requirement_type}\n\n"
-    content += f"*Description:*\n\n{requirement.description}\n\n"
-    content += f"*Version:* {requirement.version_number}\n\n"
-    user_stories = requirement.user_stories.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
-    if user_stories.exists():
-        content += f"*User Stories:*\n\n"
-        for i, story in enumerate(user_stories, 1):
-            content += f"- As a {story.role}, I want to {story.action} so that {story.benefit}\n"
-            if story.acceptance_criteria:
-                content += f"  *Acceptance Criteria:*\n"
-                for criterion in story.acceptance_criteria:
-                    content += f"  - {criterion}\n"
-            content += "\n"
+def generate_srs_document(project, requirements, creator=None):
+    current_date = timezone.now().strftime("%Y-%m-%d")
+    organization = creator.get_full_name() if creator else "Organization"
+    header = [
+        f"# Software Requirements Specification\n",
+        f"## For {project.name}\n\n",
+        f"Version 1.0  \n",
+        f"Prepared by {creator.get_full_name() if creator else 'System'}  \n",
+        f"{organization}  \n",
+        f"{current_date}  \n\n",
+    ]
 
-    content += "---\n\n"
+    toc = [
+        "# Table of Contents\n",
+        "* [Revision History](#revision-history)\n",
+        "* 1 [Introduction](#1-introduction)\n",
+        "  * 1.1 [Document Purpose](#11-document-purpose)\n",
+        "  * 1.2 [Product Scope](#12-product-scope)\n",
+        "  * 1.3 [Definitions, Acronyms and Abbreviations](#13-definitions-acronyms-and-abbreviations)\n",
+        "  * 1.4 [References](#14-references)\n",
+        "  * 1.5 [Document Overview](#15-document-overview)\n",
+        "* 2 [Product Overview](#2-product-overview)\n",
+        "  * 2.1 [Product Perspective](#21-product-perspective)\n",
+        "  * 2.2 [Product Functions](#22-product-functions)\n",
+        "  * 2.3 [Product Constraints](#23-product-constraints)\n",
+        "  * 2.4 [User Characteristics](#24-user-characteristics)\n",
+        "  * 2.5 [Assumptions and Dependencies](#25-assumptions-and-dependencies)\n",
+        "  * 2.6 [Apportioning of Requirements](#26-apportioning-of-requirements)\n",
+        "* 3 [Requirements](#3-requirements)\n",
+        "  * 3.1 [External Interfaces](#31-external-interfaces)\n",
+        "    * 3.1.1 [User Interfaces](#311-user-interfaces)\n",
+        "    * 3.1.2 [Hardware Interfaces](#312-hardware-interfaces)\n",
+        "    * 3.1.3 [Software Interfaces](#313-software-interfaces)\n",
+        "  * 3.2 [Functional Requirements](#32-functional-requirements)\n",
+        "  * 3.3 [Quality of Service](#33-quality-of-service)\n",
+        "    * 3.3.1 [Performance](#331-performance)\n",
+        "    * 3.3.2 [Security](#332-security)\n",
+        "    * 3.3.3 [Reliability](#333-reliability)\n",
+        "    * 3.3.4 [Availability](#334-availability)\n",
+        "  * 3.4 [Compliance](#34-compliance)\n",
+        "  * 3.5 [Design and Implementation](#35-design-and-implementation)\n",
+        "* 4 [Verification](#4-verification)\n",
+        "* 5 [Appendixes](#5-appendixes)\n\n",
+    ]
+    revision_history = [
+        "## Revision History\n",
+        "| Name | Date | Reason For Changes | Version |\n",
+        "| ---- | ---- | ------------------ | ------- |\n",
+        f"| {creator.get_full_name() if creator else 'System'} | {current_date} | Initial document creation | 1.0 |\n\n",
+    ]
+    introduction = generate_introduction_section(project)
+    product_overview = generate_product_overview_section(project)
+    requirements_section = generate_requirements_section(project, requirements)
+    verification = [
+        "## 4. Verification\n\n",
+        "This section outlines the verification approaches and methods planned to qualify the software. ",
+        "The purpose of the verification process is to provide objective evidence that the system ",
+        "fulfills its specified requirements and characteristics.\n\n",
+        "### 4.1 Verification Approach\n\n",
+        "The following methods will be used to verify that the requirements have been met:\n\n",
+        "- **Inspection**: Review of documents, code, and other artifacts\n",
+        "- **Analysis**: Mathematical or logical verification\n",
+        "- **Demonstration**: Show that the system performs as expected\n",
+        "- **Test**: Execute the system with specific inputs and compare to expected outputs\n\n",
+        "### 4.2 Verification Matrix\n\n",
+        "A traceability matrix will be maintained to ensure that each requirement is properly verified.\n\n",
+        "| Requirement ID | Verification Method | Success Criteria | Status |\n",
+        "| -------------- | ------------------- | ---------------- | ------ |\n"
+    ]
+    for req in requirements:
+        verification.append(
+            f"| {req.handle or 'REQ-' + str(req.id)[:8]} | Test | All acceptance criteria met | Pending |\n")
+    verification.append("\n")
+    appendixes = [
+        "## 5. Appendixes\n\n",
+        "### 5.1 Glossary\n\n",
+        "| Term | Definition |\n",
+        "| ---- | ---------- |\n",
+        "| SRS | Software Requirements Specification |\n",
+        f"| {project.type_of_application.upper()} | {get_application_type_description(project.type_of_application)} |\n\n",
+        "### 5.2 Referenced Documents\n\n",
+        "1. IEEE Std 830-1998, IEEE Recommended Practice for Software Requirements Specifications\n",
+        "2. Project Charter\n",
+        "3. Business Requirements Document\n\n",
+        "### 5.3 UML Diagrams\n\n",
+        "UML diagrams are available in the project repository.\n\n",
+        "### 5.4 Mockups\n\n",
+        "UI mockups are available in the project repository.\n\n"
+    ]
+    document = (
+            header +
+            toc +
+            revision_history +
+            introduction +
+            product_overview +
+            requirements_section +
+            verification +
+            appendixes
+    )
+
+    return "".join(document)
+
+
+def generate_introduction_section(project):
+    return [
+        "## 1. Introduction\n\n",
+        "This section provides an overview of the entire document. It includes the purpose, scope, definitions, ",
+        "references, and overview of this Software Requirements Specification (SRS) document.\n\n",
+
+        "### 1.1 Document Purpose\n\n",
+        "The purpose of this document is to specify the software requirements for the " +
+        f"{project.name} project. It describes what the system will do, not how it will be implemented. ",
+        "This document is intended for both technical and non-technical stakeholders, including developers, ",
+        "testers, project managers, product owners, and business stakeholders.\n\n",
+
+        "### 1.2 Product Scope\n\n",
+        f"This SRS applies to the {project.name} {project.type_of_application}. " +
+        f"The software is designed to {project.short_description}\n\n" if project.short_description else "The software is designed to meet the needs specified in this document.\n\n",
+
+        f"The scope of this project includes: {project.scope}\n\n" if project.scope else "",
+
+        "### 1.3 Definitions, Acronyms and Abbreviations\n\n",
+        "| Term | Definition |\n",
+        "| ---- | ---------- |\n",
+        "| SRS | Software Requirements Specification |\n",
+        "| UI | User Interface |\n",
+        "| API | Application Programming Interface |\n",
+        "| UX | User Experience |\n\n",
+
+        "### 1.4 References\n\n",
+        "1. IEEE Std 830-1998, IEEE Recommended Practice for Software Requirements Specifications\n",
+        "2. Project Charter\n",
+        "3. Business Requirements Document\n\n",
+
+        "### 1.5 Document Overview\n\n",
+        "This document is organized into the following sections:\n\n",
+        "- **Section 1: Introduction** - Provides an overview of the document\n",
+        "- **Section 2: Product Overview** - Describes the context and origin of the product\n",
+        "- **Section 3: Requirements** - Detailed software requirements specifications\n",
+        "- **Section 4: Verification** - Approaches to verify the requirements\n",
+        "- **Section 5: Appendixes** - Additional information\n\n"
+    ]
+
+
+def generate_product_overview_section(project):
+    return [
+        "## 2. Product Overview\n\n",
+        "This section describes the general factors that affect the product and its requirements. ",
+        "It provides context for the detailed requirements that follow.\n\n",
+
+        "### 2.1 Product Perspective\n\n",
+        f"The {project.name} is a {project.type_of_application} application " +
+        "designed to operate in the context of " +
+        f"{get_application_context(project.type_of_application)}. " +
+        f"{project.application_description if project.application_description else ''}\n\n",
+
+        generate_system_context_diagram(project),
+
+        "### 2.2 Product Functions\n\n",
+        "The major functions of the system include:\n\n",
+        generate_product_functions(project),
+
+        "### 2.3 Product Constraints\n\n",
+        "The system is subject to the following constraints:\n\n",
+
+        "#### 2.3.1 Technical Constraints\n\n",
+        f"- **Technology Stack**: {project.technology_stack if project.technology_stack else 'To be determined'}\n",
+        f"- **Operating Systems**: {', '.join(project.operating_systems) if project.operating_systems else 'To be determined'}\n",
+        "- **Development Constraints**: The system must be delivered within the specified timeframe and budget\n\n",
+
+        f"#### 2.3.2 Non-Functional Constraints\n\n{project.non_functional_requirements if project.non_functional_requirements else 'To be determined'}\n\n",
+
+        "### 2.4 User Characteristics\n\n",
+        f"{project.target_users if project.target_users else 'The system will serve the following types of users:'}\n\n",
+
+        "### 2.5 Assumptions and Dependencies\n\n",
+        "The following assumptions have been made regarding the project:\n\n",
+        "- All necessary hardware will be available for development and testing\n",
+        "- Required third-party services will remain operational\n",
+        "- Stakeholders will be available to provide timely feedback\n\n",
+
+        "### 2.6 Apportioning of Requirements\n\n",
+        "Requirements have been prioritized as follows:\n\n",
+        "- **High Priority**: Requirements that must be implemented in the initial release\n",
+        "- **Medium Priority**: Requirements that should be implemented if time permits\n",
+        "- **Low Priority**: Requirements that can be deferred to future releases\n\n",
+        f"{project.priority_modules if project.priority_modules else ''}\n\n"
+    ]
+
+
+def generate_requirements_section(project, requirements):
+    functional_reqs = [r for r in requirements if r.category == REQUIREMENT_CATEGORY_FUNCTIONAL]
+    ui_reqs = [r for r in requirements if r.category == REQUIREMENT_CATEGORY_UIUX]
+    nonfunctional_reqs = [r for r in requirements if r.category == REQUIREMENT_CATEGORY_NONFUNCTIONAL]
+    other_reqs = [r for r in requirements if r.category == REQUIREMENT_CATEGORY_OTHER]
+
+    section = [
+        "## 3. Requirements\n\n",
+        "This section specifies the software product's requirements to a level of detail sufficient ",
+        "to enable designers to design a system that satisfies those requirements, and testers to ",
+        "test that the system satisfies those requirements.\n\n"
+    ]
+    section.extend([
+        "### 3.1 External Interfaces\n\n",
+        "This section defines all inputs into and outputs from the software system.\n\n",
+
+        "#### 3.1.1 User Interfaces\n\n",
+        "The system will provide the following user interfaces:\n\n"
+    ])
+    if ui_reqs:
+        for i, req in enumerate(ui_reqs, 1):
+            section.append(f"##### {req.handle or f'UI-{i}'}: {req.title}\n\n")
+            section.append(f"{req.description}\n\n")
+    else:
+        section.append("User interface requirements will be defined during the design phase.\n\n")
+    section.extend([
+        "#### 3.1.2 Hardware Interfaces\n\n",
+        f"The system will run on {', '.join(project.operating_systems) if project.operating_systems else 'standard hardware platforms'}.\n\n",
+        "#### 3.1.3 Software Interfaces\n\n",
+        f"The system will interface with the following software systems:\n\n"
+    ])
+
+    if project.technology_stack:
+        tech_items = [tech.strip() for tech in project.technology_stack.split(',')]
+        for tech in tech_items:
+            section.append(f"- {tech}\n")
+    else:
+        section.append("Software interfaces will be defined during the design phase.\n\n")
+    section.append("\n### 3.2 Functional Requirements\n\n")
+    root_reqs = [r for r in functional_reqs if r.parent is None]
+    for i, req in enumerate(root_reqs, 1):
+        section.extend(format_requirement_hierarchy(req, functional_reqs, i, "3.2"))
+
+    section.extend([
+        "\n### 3.3 Quality of Service\n\n",
+        "This section describes the quality-related property requirements.\n\n"
+    ])
+    performance_reqs = [r for r in nonfunctional_reqs if r.requirement_type == REQUIREMENT_TYPE_PERFORMANCE]
+    security_reqs = [r for r in nonfunctional_reqs if r.requirement_type == REQUIREMENT_TYPE_SECURITY]
+    reliability_reqs = [r for r in nonfunctional_reqs if
+                        not (r.requirement_type in [REQUIREMENT_TYPE_PERFORMANCE, REQUIREMENT_TYPE_SECURITY])]
+    section.append("#### 3.3.1 Performance\n\n")
+    if performance_reqs:
+        for i, req in enumerate(performance_reqs, 1):
+            section.append(f"##### {req.handle or f'PERF-{i}'}: {req.title}\n\n")
+            section.append(f"{req.description}\n\n")
+    else:
+        section.append("Performance requirements will be defined during the design phase.\n\n")
+    section.append("#### 3.3.2 Security\n\n")
+    if security_reqs:
+        for i, req in enumerate(security_reqs, 1):
+            section.append(f"##### {req.handle or f'SEC-{i}'}: {req.title}\n\n")
+            section.append(f"{req.description}\n\n")
+    else:
+        section.append("Security requirements will be defined during the design phase.\n\n")
+    section.extend([
+        "#### 3.3.3 Reliability\n\n",
+        "The system shall operate reliably under normal operating conditions.\n\n",
+        "#### 3.3.4 Availability\n\n",
+        "The system shall be available during specified operating hours with minimal downtime.\n\n"
+    ])
+    section.extend([
+        "### 3.4 Compliance\n\n",
+        "The system shall comply with all relevant legal, regulatory, and industry standards.\n\n",
+
+        "### 3.5 Design and Implementation\n\n",
+        "#### 3.5.1 Installation\n\n",
+        f"The {project.type_of_application} will be installed according to industry standard practices.\n\n",
+
+        "#### 3.5.2 Distribution\n\n",
+        f"The {project.type_of_application} will be distributed via appropriate channels for the target platforms.\n\n",
+
+        "#### 3.5.3 Maintainability\n\n",
+        "The code shall be written and documented to facilitate maintenance.\n\n",
+
+        "#### 3.5.4 Reusability\n\n",
+        "Components shall be designed with reusability in mind where appropriate.\n\n",
+
+        "#### 3.5.5 Portability\n\n",
+        f"The system shall be portable across {', '.join(project.operating_systems) if project.operating_systems else 'specified platforms'}.\n\n",
+
+        "#### 3.5.6 Cost\n\n",
+        f"The estimated cost for development is {project.preliminary_budget if project.preliminary_budget else 'to be determined'}.\n\n",
+
+        "#### 3.5.7 Deadline\n\n"
+    ])
+
+    if project.deadline_start and project.deadline_end:
+        section.append(
+            f"Development will commence on {project.deadline_start.strftime('%Y-%m-%d')} and is scheduled to be completed by {project.deadline_end.strftime('%Y-%m-%d')}.\n\n")
+    elif project.deadline_end:
+        section.append(f"The project is scheduled to be completed by {project.deadline_end.strftime('%Y-%m-%d')}.\n\n")
+    else:
+        section.append("The project deadline will be determined in the project planning phase.\n\n")
+
+    section.append("#### 3.5.8 Proof of Concept\n\n")
+    section.append(
+        "A prototype or proof of concept may be developed to validate key technical aspects of the system.\n\n")
+
+    return section
+
+
+def format_requirement_hierarchy(requirement, all_reqs, index, prefix):
+    result = []
+    req_id = f"{prefix}.{index}"
+    result.append(f"#### {req_id} {requirement.handle or ''}: {requirement.title}\n\n")
+    result.append(f"**Description**: {requirement.description}\n\n")
+    result.append(f"**Type**: {requirement.requirement_type}\n")
+    result.append(f"**Status**: {requirement.status}\n")
+    result.append(f"**Version**: {requirement.version_number}\n\n")
+    user_stories = UserStory.objects.filter(requirement=requirement, status__in=[STATUS_ACTIVE, STATUS_DRAFT])
+    if user_stories.exists():
+        result.append("**User Stories**:\n\n")
+        for story in user_stories:
+            result.append(f"- As a {story.role}, I want to {story.action} so that {story.benefit}\n")
+            if story.acceptance_criteria:
+                result.append("  **Acceptance Criteria**:\n")
+                for criterion in story.acceptance_criteria:
+                    result.append(f"  - {criterion}\n")
+        result.append("\n")
+
+    mockups = Mockup.objects.filter(requirement=requirement, status=STATUS_ACTIVE)
+    if mockups.exists():
+        result.append("**Mockups**: Available in the project repository\n\n")
+    comments = RequirementComment.objects.filter(requirement=requirement, status=STATUS_ACTIVE)
+    if comments.exists():
+        result.append("**Notes**:\n\n")
+        for comment in comments:
+            result.append(f"- {comment.text} (by {comment.user.username}, {comment.created_at.strftime('%Y-%m-%d')})\n")
+        result.append("\n")
     children = [r for r in all_reqs if r.parent and r.parent.id == requirement.id]
     for i, child in enumerate(children, 1):
-        child_prefix = f"{req_id}."
-        content = _add_requirement_to_srs(content, child, all_reqs, i, child_prefix, cat_prefix)
+        child_prefix = f"{req_id}"
+        child_result = format_requirement_hierarchy(child, all_reqs, i, child_prefix)
+        result.extend(child_result)
 
-    return content
+    result.append("---\n\n")
+    return result
 
+
+def get_application_type_description(app_type):
+    descriptions = {
+        PROJECT_TYPE_WEBSITE: "Web-based application accessible through standard browsers",
+        PROJECT_TYPE_MOBILE: "Mobile application for smartphones and tablets",
+        PROJECT_TYPE_DESKTOP: "Software application that runs on desktop computers",
+        PROJECT_TYPE_API: "Application Programming Interface for system integration",
+        PROJECT_TYPE_OTHER: "Custom software application"
+    }
+    return descriptions.get(app_type, "Software application")
+
+
+def get_application_context(app_type):
+    contexts = {
+        PROJECT_TYPE_WEBSITE: "web browsers and internet services",
+        PROJECT_TYPE_MOBILE: "mobile operating systems and app stores",
+        PROJECT_TYPE_DESKTOP: "desktop operating systems",
+        PROJECT_TYPE_API: "networked systems and services",
+        PROJECT_TYPE_OTHER: "its target environment"
+    }
+    return contexts.get(app_type, "its operating environment")
+
+
+def generate_system_context_diagram(project):
+    return (
+        "**System Context Diagram**:\n\n"
+        "The following diagram illustrates the system context:\n\n"
+        "```\n"
+        f"    ┌────────────────┐      ┌────────────────┐\n"
+        f"    │                │      │                │\n"
+        f"    │     Users      │◄────►│  {project.name.ljust(12)}  │\n"
+        f"    │                │      │                │\n"
+        f"    └────────────────┘      └───────┬────────┘\n"
+        f"                                     │\n"
+        f"                                     ▼\n"
+        f"                            ┌────────────────┐\n"
+        f"                            │   External     │\n"
+        f"                            │   Systems      │\n"
+        f"                            │                │\n"
+        f"                            └────────────────┘\n"
+        "```\n\n"
+    )
+
+
+def generate_product_functions(project):
+    functions = []
+    requirements = Requirement.objects.filter(
+        project_id=project.id,
+        status__in=[STATUS_ACTIVE, STATUS_DRAFT],
+        category=REQUIREMENT_CATEGORY_FUNCTIONAL
+    )
+
+    if requirements.exists():
+        for req in requirements[:5]:
+            functions.append(f"- {req.title}\n")
+        if requirements.count() > 5:
+            functions.append(f"- And {requirements.count() - 5} additional functions\n")
+    elif project.priority_modules:
+        modules = project.priority_modules.split('\n')
+        for module in modules:
+            if module.strip():
+                functions.append(f"- {module.strip()}\n")
+    else:
+        if project.type_of_application == PROJECT_TYPE_WEBSITE:
+            functions = [
+                "- User registration and authentication\n",
+                "- Content management\n",
+                "- Search functionality\n",
+                "- Responsive design for various devices\n"
+            ]
+        elif project.type_of_application == PROJECT_TYPE_MOBILE:
+            functions = [
+                "- User authentication\n",
+                "- Push notifications\n",
+                "- Offline functionality\n",
+                "- Mobile-specific features (location, camera, etc.)\n"
+            ]
+        elif project.type_of_application == PROJECT_TYPE_API:
+            functions = [
+                "- Authentication and authorization\n",
+                "- Data retrieval endpoints\n",
+                "- Data manipulation endpoints\n",
+                "- API documentation\n"
+            ]
+        else:
+            functions = [
+                "- Core functionality\n",
+                "- User interaction\n",
+                "- Data management\n",
+                "- Reporting and analytics\n"
+            ]
+
+    return "".join(functions) + "\n"
 
 @app.task
 def generate_development_plan_task(project_id, user_id=None):

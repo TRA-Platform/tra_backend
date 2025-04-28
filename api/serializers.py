@@ -192,12 +192,12 @@ class RequirementDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Requirement
         fields = (
-            "id", "project", "parent", "children", "title", "description",
+            "id", "project", "parent", "children", "title", "handle", "description",
             "category", "requirement_type", "version_number", "status",
             "created_at", "updated_at", "history", "comments", "user_stories", "mockups"
         )
         read_only_fields = ("id", "version_number", "created_at", "updated_at",
-                            "history", "comments", "user_stories", "mockups")
+                            "history", "comments", "user_stories", "mockups", "handle")
 
     def get_user_stories(self, obj):
         user_stories = UserStory.objects.filter(
@@ -252,10 +252,10 @@ class RequirementSerializer(serializers.ModelSerializer):
     class Meta:
         model = Requirement
         fields = (
-            "id", "project", "parent", "title", "description", "category",
+            "id", "project", "parent", "title", "handle", "description", "category",
             "requirement_type", "version_number", "status", "created_at", "updated_at"
         )
-        read_only_fields = ("id", "version_number", "created_at", "updated_at")
+        read_only_fields = ("id", "version_number", "created_at", "updated_at", "handle")
 
 
 class DevelopmentPlanVersionSerializer(serializers.ModelSerializer):
