@@ -15,12 +15,13 @@ from .models import (
     GENERATION_STATUS_FAILED, UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY,
     UML_DIAGRAM_TYPE_COMPONENT, PROJECT_TYPE_API, PROJECT_TYPE_MOBILE, PROJECT_TYPE_WEBSITE, PROJECT_TYPE_DESKTOP,
     PROJECT_TYPE_OTHER, RequirementComment, REQUIREMENT_TYPE_PERFORMANCE, REQUIREMENT_TYPE_SECURITY, LANGUAGE_ENGLISH,
-    LANGUAGE_RUSSIAN, LANGUAGE_GERMAN, SRS_FORMAT_MARKDOWN
+    LANGUAGE_RUSSIAN, LANGUAGE_GERMAN, SRS_FORMAT_MARKDOWN, SRS_FORMAT_HTML, SRS_FORMAT_PDF
 )
 from gpt.adapter import GptClient
 from .srs_translations import get_translations
 from django.conf import settings
 from .s3_utils import upload_to_s3, generate_export_filename
+from .doc_utils import convert_md_to_html, convert_md_to_pdf
 
 app = current_app._get_current_object()
 logger = logging.getLogger(__name__)
@@ -176,7 +177,7 @@ def generate_requirements_task(project_id, user_id=None):
         project.generation_completed_at = timezone.now()
         project.save()
         generate_user_stories_task.delay(str(project.id), user_id=str(user.id) if user else None)
-        
+
         return {"success": True, "requirements_count": len(new_requirements)}
     except Exception as e:
         logger.error(f"Error generating requirements: {str(e)}")
@@ -369,23 +370,37 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
     )
 
     requirements = project.requirements.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
-    content = generate_srs_document(project, requirements, creator)
+    md_content = generate_srs_document(project, requirements, creator)
 
-    if fmt == SRS_FORMAT_MARKDOWN:
-        try:
-            filename = generate_export_filename(project.name, str(export.id), file_extension='md')
-            url = upload_to_s3(content, filename, settings.S3_BUCKET_NAME)
-            export.url = url
-        except Exception as e:
-            logger.error(f"Failed to upload to S3: {str(e)}")
-            export.status = STATUS_ARCHIVED
-            export.save()
-            return {"error": f"Failed to upload to S3: {str(e)}"}
+    try:
+        if fmt == SRS_FORMAT_MARKDOWN:
+            filename = generate_export_filename(project.name, str(export.id), 'md')
+            content = md_content
+        elif fmt == SRS_FORMAT_HTML:
+            filename = generate_export_filename(project.name, str(export.id), 'html')
+            content = convert_md_to_html(md_content)
+        elif fmt == SRS_FORMAT_PDF:
+            filename = generate_export_filename(project.name, str(export.id), 'pdf')
+            content = convert_md_to_pdf(md_content)
+        else:
+            raise ValueError(f"Unsupported format: {fmt}")
 
-    export.content = content
-    export.save()
+        url = upload_to_s3(content, filename, settings.S3_BUCKET_NAME, fmt)
+        export.url = url
+        export.content = md_content
+        export.save()
 
-    return {"success": True, "export_id": str(export.id), "format": fmt, "url": export.url if fmt == SRS_FORMAT_MARKDOWN else None}
+        return {
+            "success": True,
+            "export_id": str(export.id),
+            "format": fmt,
+            "url": url
+        }
+    except Exception as e:
+        logger.error(f"Failed to process export: {str(e)}")
+        export.status = STATUS_ARCHIVED
+        export.save()
+        return {"error": f"Failed to process export: {str(e)}"}
 
 
 def generate_srs_document(project, requirements, creator=None):
@@ -865,6 +880,7 @@ def generate_product_functions(project, translations):
 
     return "".join(functions) + "\n"
 
+
 @app.task
 def generate_development_plan_task(project_id, user_id=None):
     logger.info(f"Generating development plan for project {project_id}")
@@ -981,7 +997,8 @@ def generate_development_plan_task(project_id, user_id=None):
         if plan.status == STATUS_ARCHIVED:
             plan.status = STATUS_DRAFT
         plan.save()
-        for diagram_type in [UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY, UML_DIAGRAM_TYPE_COMPONENT]:
+        for diagram_type in [UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY,
+                             UML_DIAGRAM_TYPE_COMPONENT]:
             generate_uml_diagrams_task.delay(str(project.id), diagram_type=diagram_type, plan_version_id=str(dv.id))
 
         return {
@@ -1365,7 +1382,8 @@ def _create_mockup_prompt(project, user_story, requirement, regenerate_mockup=No
     if requirement:
         user_stories = UserStory.objects.filter(requirement=requirement)
         user_stories_prompt = '\n'.join([
-            f"{i+1}. As a {user_story.role}, I want to {user_story.action} so that {user_story.benefit}\n\n" for i, user_story in enumerate(user_stories)
+            f"{i + 1}. As a {user_story.role}, I want to {user_story.action} so that {user_story.benefit}\n\n" for
+            i, user_story in enumerate(user_stories)
         ])
         prompt += (
             f"Requirement:\n"

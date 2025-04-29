@@ -13,8 +13,17 @@ def get_s3_client():
         region_name=settings.S3_REGION
     )
 
-def upload_to_s3(content, filename, bucket_name, content_type='text/markdown; charset=utf-8'):
+def get_content_type(file_extension):
+    content_types = {
+        'md': 'text/markdown; charset=utf-8',
+        'html': 'text/html; charset=utf-8',
+        'pdf': 'application/pdf'
+    }
+    return content_types.get(file_extension, 'application/octet-stream')
+
+def upload_to_s3(content, filename, bucket_name, file_extension='md'):
     s3_client = get_s3_client()
+    content_type = get_content_type(file_extension)
     
     try:
         s3_client.put_object(
