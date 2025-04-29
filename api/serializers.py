@@ -6,7 +6,7 @@ from .models import (
     RequirementComment, DevelopmentPlan, DevelopmentPlanVersion,
     Mockup, MockupHistory, UserStory, UserStoryHistory, UserStoryComment,
     UmlDiagram, STATUS_ARCHIVED, UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_ACTIVITY, UML_DIAGRAM_TYPE_SEQUENCE,
-    UML_DIAGRAM_TYPE_COMPONENT
+    UML_DIAGRAM_TYPE_COMPONENT, SrsExport
 )
 
 
@@ -180,6 +180,24 @@ class MockupSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+class SrsExportSerializer(serializers.ModelSerializer):
+    created_by = UserSerializer(read_only=True)
+    template = SrsTemplateSerializer(read_only=True)
+
+    class Meta:
+        model = SrsExport
+        fields = (
+            "id", "status", "template",
+            "url", "fmt", "created_by", "created_at"
+        )
+        read_only_fields = (
+            "id", "created_by", "created_at", "url"
+        )
+
+    def create(self, validated_data):
+        validated_data["created_by"] = self.context["request"].user
+        return super().create(validated_data)
+
 
 class RequirementDetailSerializer(serializers.ModelSerializer):
     history = RequirementHistorySerializer(many=True, read_only=True)
@@ -319,6 +337,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     uml_diagrams = UmlDiagramSerializer(many=True, read_only=True)
     user_stories = serializers.SerializerMethodField()
     generation_progress = serializers.SerializerMethodField()
+    srs_exports = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
@@ -331,12 +350,13 @@ class ProjectSerializer(serializers.ModelSerializer):
             "scope", "generation_status", "generation_started_at",
             "generation_completed_at", "generation_error", "status",
             "created_at", "updated_at", "requirements", "mockups",
-            "development_plan", "uml_diagrams", "user_stories", "generation_progress"
+            "development_plan", "uml_diagrams", "user_stories", "generation_progress",
+            "srs_exports"
         )
         read_only_fields = (
             "id", "created_by", "created_at", "updated_at", "requirements",
             "generation_status", "generation_started_at", "generation_completed_at",
-            "generation_error", "generation_progress"
+            "generation_error", "generation_progress", "srs_exports"
         )
 
     def create(self, validated_data):
@@ -346,6 +366,10 @@ class ProjectSerializer(serializers.ModelSerializer):
         from .tasks import generate_requirements_task
         generate_requirements_task.delay(str(project.id), user_id=str(self.context["request"].user.id))
         return project
+    
+    def get_srs_exports(self, obj):
+        srs_exports = SrsExport.objects.filter(project=obj)
+        return SrsExportSerializer(srs_exports, many=True).data
 
     def get_user_stories(self, obj):
         user_stories = UserStory.objects.filter(

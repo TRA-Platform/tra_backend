@@ -341,6 +341,7 @@ class UmlDiagram(models.Model):
     name = models.CharField(max_length=200)
     diagram_type = models.CharField(max_length=50, choices=UML_DIAGRAM_TYPE_CHOICES, default=UML_DIAGRAM_TYPE_CLASS)
     content = models.TextField()
+    # url = models.URLField(default="", blank=True)
     notes = models.TextField(blank=True)
     generation_status = models.CharField(
         max_length=20, choices=GENERATION_STATUS_CHOICES, default=GENERATION_STATUS_PENDING
