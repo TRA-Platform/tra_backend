@@ -14,9 +14,11 @@ from .models import (
     GENERATION_STATUS_IN_PROGRESS, GENERATION_STATUS_COMPLETED,
     GENERATION_STATUS_FAILED, UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY,
     UML_DIAGRAM_TYPE_COMPONENT, PROJECT_TYPE_API, PROJECT_TYPE_MOBILE, PROJECT_TYPE_WEBSITE, PROJECT_TYPE_DESKTOP,
-    PROJECT_TYPE_OTHER, RequirementComment, REQUIREMENT_TYPE_PERFORMANCE, REQUIREMENT_TYPE_SECURITY
+    PROJECT_TYPE_OTHER, RequirementComment, REQUIREMENT_TYPE_PERFORMANCE, REQUIREMENT_TYPE_SECURITY, LANGUAGE_ENGLISH,
+    LANGUAGE_RUSSIAN, LANGUAGE_GERMAN
 )
 from gpt.adapter import GptClient
+from .srs_translations import get_translations
 
 app = current_app._get_current_object()
 logger = logging.getLogger(__name__)
@@ -171,8 +173,6 @@ def generate_requirements_task(project_id, user_id=None):
         project.generation_status = GENERATION_STATUS_COMPLETED
         project.generation_completed_at = timezone.now()
         project.save()
-
-        # Chain user stories generation
         generate_user_stories_task.delay(str(project.id), user_id=str(user.id) if user else None)
         
         return {"success": True, "requirements_count": len(new_requirements)}
@@ -336,12 +336,9 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
                         generation_completed_at=timezone.now()
                     )
                     created_stories.append(str(new_story.id))
-
-        # If this was a full project generation (not just for one requirement or story),
-        # chain the development plan generation
+                    generate_mockups_task.delay(str(project.id), requirement_id=str(requirement.id))
         if not requirement_id and not user_story_id:
             generate_development_plan_task.delay(str(project.id), user_id=str(user.id) if user else None)
-        generate_mockups_task.delay(str(project.id), requirement_id=requirement_id)
         return {"success": True, "created_user_stories": created_stories, "count": len(created_stories)}
     except Exception as e:
         logger.error(f"Error generating user stories: {str(e)}")
@@ -368,8 +365,10 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
         created_by=creator,
         status=STATUS_ACTIVE,
     )
+
     requirements = project.requirements.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
     content = generate_srs_document(project, requirements, creator)
+
     export.content = content
     export.save()
 
@@ -379,92 +378,66 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
 def generate_srs_document(project, requirements, creator=None):
     current_date = timezone.now().strftime("%Y-%m-%d")
     organization = creator.get_full_name() if creator else "Organization"
+
+    language = project.language if project.language in [LANGUAGE_ENGLISH, LANGUAGE_RUSSIAN,
+                                                        LANGUAGE_GERMAN] else LANGUAGE_ENGLISH
+    translations = get_translations(language)
+
     header = [
-        f"# Software Requirements Specification\n",
-        f"## For {project.name}\n\n",
-        f"Version 1.0  \n",
-        f"Prepared by {creator.get_full_name() if creator else 'System'}  \n",
+        f"# {translations['srs_title']}\n",
+        f"## {translations['for']} {project.name}\n\n",
+        f"{translations['version']} 1.0  \n",
+        f"{translations['prepared_by']} {creator.get_full_name() if creator else translations['system']}  \n",
         f"{organization}  \n",
         f"{current_date}  \n\n",
     ]
 
     toc = [
-        "# Table of Contents\n",
-        "* [Revision History](#revision-history)\n",
-        "* 1 [Introduction](#1-introduction)\n",
-        "  * 1.1 [Document Purpose](#11-document-purpose)\n",
-        "  * 1.2 [Product Scope](#12-product-scope)\n",
-        "  * 1.3 [Definitions, Acronyms and Abbreviations](#13-definitions-acronyms-and-abbreviations)\n",
-        "  * 1.4 [References](#14-references)\n",
-        "  * 1.5 [Document Overview](#15-document-overview)\n",
-        "* 2 [Product Overview](#2-product-overview)\n",
-        "  * 2.1 [Product Perspective](#21-product-perspective)\n",
-        "  * 2.2 [Product Functions](#22-product-functions)\n",
-        "  * 2.3 [Product Constraints](#23-product-constraints)\n",
-        "  * 2.4 [User Characteristics](#24-user-characteristics)\n",
-        "  * 2.5 [Assumptions and Dependencies](#25-assumptions-and-dependencies)\n",
-        "  * 2.6 [Apportioning of Requirements](#26-apportioning-of-requirements)\n",
-        "* 3 [Requirements](#3-requirements)\n",
-        "  * 3.1 [External Interfaces](#31-external-interfaces)\n",
-        "    * 3.1.1 [User Interfaces](#311-user-interfaces)\n",
-        "    * 3.1.2 [Hardware Interfaces](#312-hardware-interfaces)\n",
-        "    * 3.1.3 [Software Interfaces](#313-software-interfaces)\n",
-        "  * 3.2 [Functional Requirements](#32-functional-requirements)\n",
-        "  * 3.3 [Quality of Service](#33-quality-of-service)\n",
-        "    * 3.3.1 [Performance](#331-performance)\n",
-        "    * 3.3.2 [Security](#332-security)\n",
-        "    * 3.3.3 [Reliability](#333-reliability)\n",
-        "    * 3.3.4 [Availability](#334-availability)\n",
-        "  * 3.4 [Compliance](#34-compliance)\n",
-        "  * 3.5 [Design and Implementation](#35-design-and-implementation)\n",
-        "* 4 [Verification](#4-verification)\n",
-        "* 5 [Appendixes](#5-appendixes)\n\n",
+        f"# {translations['table_of_contents']}\n",
+        f"* [{translations['revision_history']}](#revision-history)\n",
+        f"* 1 [{translations['introduction']}](#1-introduction)\n",
+        f"  * 1.1 [{translations['document_purpose']}](#11-document-purpose)\n",
+        f"  * 1.2 [{translations['product_scope']}](#12-product-scope)\n",
+        f"  * 1.3 [{translations['definitions']}](#13-definitions-acronyms-and-abbreviations)\n",
+        f"  * 1.4 [{translations['references']}](#14-references)\n",
+        f"  * 1.5 [{translations['document_overview']}](#15-document-overview)\n",
+        f"* 2 [{translations['product_overview']}](#2-product-overview)\n",
+        f"  * 2.1 [{translations['product_perspective']}](#21-product-perspective)\n",
+        f"  * 2.2 [{translations['product_functions']}](#22-product-functions)\n",
+        f"  * 2.3 [{translations['product_constraints']}](#23-product-constraints)\n",
+        f"  * 2.4 [{translations['user_characteristics']}](#24-user-characteristics)\n",
+        f"  * 2.5 [{translations['assumptions']}](#25-assumptions-and-dependencies)\n",
+        f"  * 2.6 [{translations['apportioning']}](#26-apportioning-of-requirements)\n",
+        f"* 3 [{translations['requirements']}](#3-requirements)\n",
+        f"  * 3.1 [{translations['external_interfaces']}](#31-external-interfaces)\n",
+        f"    * 3.1.1 [{translations['user_interfaces']}](#311-user-interfaces)\n",
+        f"    * 3.1.2 [{translations['hardware_interfaces']}](#312-hardware-interfaces)\n",
+        f"    * 3.1.3 [{translations['software_interfaces']}](#313-software-interfaces)\n",
+        f"  * 3.2 [{translations['functional_requirements']}](#32-functional-requirements)\n",
+        f"  * 3.3 [{translations['quality_of_service']}](#33-quality-of-service)\n",
+        f"    * 3.3.1 [{translations['performance']}](#331-performance)\n",
+        f"    * 3.3.2 [{translations['security']}](#332-security)\n",
+        f"    * 3.3.3 [{translations['reliability']}](#333-reliability)\n",
+        f"    * 3.3.4 [{translations['availability']}](#334-availability)\n",
+        f"  * 3.4 [{translations['compliance']}](#34-compliance)\n",
+        f"  * 3.5 [{translations['design_implementation']}](#35-design-and-implementation)\n",
+        f"* 4 [{translations['verification']}](#4-verification)\n",
+        f"* 5 [{translations['appendixes']}](#5-appendixes)\n\n",
     ]
+
     revision_history = [
-        "## Revision History\n",
-        "| Name | Date | Reason For Changes | Version |\n",
+        f"## {translations['revision_history']}\n",
+        f"| {translations['name']} | {translations['date']} | {translations['reason']} | {translations['version']} |\n",
         "| ---- | ---- | ------------------ | ------- |\n",
-        f"| {creator.get_full_name() if creator else 'System'} | {current_date} | Initial document creation | 1.0 |\n\n",
+        f"| {creator.get_full_name() if creator else translations['system']} | {current_date} | {translations['initial_creation']} | 1.0 |\n\n",
     ]
-    introduction = generate_introduction_section(project)
-    product_overview = generate_product_overview_section(project)
-    requirements_section = generate_requirements_section(project, requirements)
-    verification = [
-        "## 4. Verification\n\n",
-        "This section outlines the verification approaches and methods planned to qualify the software. ",
-        "The purpose of the verification process is to provide objective evidence that the system ",
-        "fulfills its specified requirements and characteristics.\n\n",
-        "### 4.1 Verification Approach\n\n",
-        "The following methods will be used to verify that the requirements have been met:\n\n",
-        "- **Inspection**: Review of documents, code, and other artifacts\n",
-        "- **Analysis**: Mathematical or logical verification\n",
-        "- **Demonstration**: Show that the system performs as expected\n",
-        "- **Test**: Execute the system with specific inputs and compare to expected outputs\n\n",
-        "### 4.2 Verification Matrix\n\n",
-        "A traceability matrix will be maintained to ensure that each requirement is properly verified.\n\n",
-        "| Requirement ID | Verification Method | Success Criteria | Status |\n",
-        "| -------------- | ------------------- | ---------------- | ------ |\n"
-    ]
-    for req in requirements:
-        verification.append(
-            f"| {req.handle or 'REQ-' + str(req.id)[:8]} | Test | All acceptance criteria met | Pending |\n")
-    verification.append("\n")
-    appendixes = [
-        "## 5. Appendixes\n\n",
-        "### 5.1 Glossary\n\n",
-        "| Term | Definition |\n",
-        "| ---- | ---------- |\n",
-        "| SRS | Software Requirements Specification |\n",
-        f"| {project.type_of_application.upper()} | {get_application_type_description(project.type_of_application)} |\n\n",
-        "### 5.2 Referenced Documents\n\n",
-        "1. IEEE Std 830-1998, IEEE Recommended Practice for Software Requirements Specifications\n",
-        "2. Project Charter\n",
-        "3. Business Requirements Document\n\n",
-        "### 5.3 UML Diagrams\n\n",
-        "UML diagrams are available in the project repository.\n\n",
-        "### 5.4 Mockups\n\n",
-        "UI mockups are available in the project repository.\n\n"
-    ]
+
+    introduction = generate_introduction_section(project, translations)
+    product_overview = generate_product_overview_section(project, translations)
+    requirements_section = generate_requirements_section(project, requirements, translations)
+    verification = generate_verification_section(requirements, translations)
+    appendixes = generate_appendixes_section(project, translations)
+
     document = (
             header +
             toc +
@@ -479,123 +452,119 @@ def generate_srs_document(project, requirements, creator=None):
     return "".join(document)
 
 
-def generate_introduction_section(project):
+def generate_introduction_section(project, translations):
     return [
-        "## 1. Introduction\n\n",
-        "This section provides an overview of the entire document. It includes the purpose, scope, definitions, ",
-        "references, and overview of this Software Requirements Specification (SRS) document.\n\n",
+        f"## 1. {translations['introduction']}\n\n",
+        f"{translations['introduction_desc']}\n\n",
 
-        "### 1.1 Document Purpose\n\n",
-        "The purpose of this document is to specify the software requirements for the " +
-        f"{project.name} project. It describes what the system will do, not how it will be implemented. ",
-        "This document is intended for both technical and non-technical stakeholders, including developers, ",
-        "testers, project managers, product owners, and business stakeholders.\n\n",
+        f"### 1.1 {translations['document_purpose']}\n\n",
+        f"{translations['document_purpose_desc']} " +
+        f"{project.name} {translations['project']}. {translations['document_purpose_desc2']}\n\n",
 
-        "### 1.2 Product Scope\n\n",
-        f"This SRS applies to the {project.name} {project.type_of_application}. " +
-        f"The software is designed to {project.short_description}\n\n" if project.short_description else "The software is designed to meet the needs specified in this document.\n\n",
+        f"### 1.2 {translations['product_scope']}\n\n",
+        f"{translations['product_scope_desc1']} {project.name} {get_application_type(project.type_of_application, translations)}. " +
+        f"{translations['product_scope_desc2']} {project.short_description if project.short_description else translations['meet_needs']}\n\n" +
+        f"{translations['scope_includes']} {project.scope}\n\n" if project.scope else "\n\n",
 
-        f"The scope of this project includes: {project.scope}\n\n" if project.scope else "",
-
-        "### 1.3 Definitions, Acronyms and Abbreviations\n\n",
-        "| Term | Definition |\n",
+        f"### 1.3 {translations['definitions']}\n\n",
+        f"| {translations['term']} | {translations['definition']} |\n",
         "| ---- | ---------- |\n",
-        "| SRS | Software Requirements Specification |\n",
-        "| UI | User Interface |\n",
-        "| API | Application Programming Interface |\n",
-        "| UX | User Experience |\n\n",
+        f"| SRS | {translations['srs_definition']} |\n",
+        f"| UI | {translations['ui_definition']} |\n",
+        f"| API | {translations['api_definition']} |\n",
+        f"| UX | {translations['ux_definition']} |\n\n",
 
-        "### 1.4 References\n\n",
-        "1. IEEE Std 830-1998, IEEE Recommended Practice for Software Requirements Specifications\n",
-        "2. Project Charter\n",
-        "3. Business Requirements Document\n\n",
+        f"### 1.4 {translations['references']}\n\n",
+        f"1. IEEE Std 830-1998, {translations['ieee_reference']}\n",
+        f"2. {translations['project_charter']}\n",
+        f"3. {translations['business_requirements']}\n\n",
 
-        "### 1.5 Document Overview\n\n",
-        "This document is organized into the following sections:\n\n",
-        "- **Section 1: Introduction** - Provides an overview of the document\n",
-        "- **Section 2: Product Overview** - Describes the context and origin of the product\n",
-        "- **Section 3: Requirements** - Detailed software requirements specifications\n",
-        "- **Section 4: Verification** - Approaches to verify the requirements\n",
-        "- **Section 5: Appendixes** - Additional information\n\n"
+        f"### 1.5 {translations['document_overview']}\n\n",
+        f"{translations['document_organized']}:\n\n",
+        f"- **{translations['section']} 1: {translations['introduction']}** - {translations['section1_desc']}\n",
+        f"- **{translations['section']} 2: {translations['product_overview']}** - {translations['section2_desc']}\n",
+        f"- **{translations['section']} 3: {translations['requirements']}** - {translations['section3_desc']}\n",
+        f"- **{translations['section']} 4: {translations['verification']}** - {translations['section4_desc']}\n",
+        f"- **{translations['section']} 5: {translations['appendixes']}** - {translations['section5_desc']}\n\n"
     ]
 
 
-def generate_product_overview_section(project):
+def generate_product_overview_section(project, translations):
     return [
-        "## 2. Product Overview\n\n",
-        "This section describes the general factors that affect the product and its requirements. ",
-        "It provides context for the detailed requirements that follow.\n\n",
+        f"## 2. {translations['product_overview']}\n\n",
+        f"{translations['product_overview_desc']}\n\n",
 
-        "### 2.1 Product Perspective\n\n",
-        f"The {project.name} is a {project.type_of_application} application " +
-        "designed to operate in the context of " +
-        f"{get_application_context(project.type_of_application)}. " +
+        f"### 2.1 {translations['product_perspective']}\n\n",
+        f"{translations['product_perspective_desc1']} {project.name} {translations['is_a']} {get_application_type(project.type_of_application, translations)} " +
+        f"{translations['product_perspective_desc2']} " +
+        f"{get_application_context(project.type_of_application, translations)}. " +
         f"{project.application_description if project.application_description else ''}\n\n",
 
-        generate_system_context_diagram(project),
+        generate_system_context_diagram(project, translations),
 
-        "### 2.2 Product Functions\n\n",
-        "The major functions of the system include:\n\n",
-        generate_product_functions(project),
+        f"### 2.2 {translations['product_functions']}\n\n",
+        f"{translations['major_functions']}:\n\n",
+        generate_product_functions(project, translations),
 
-        "### 2.3 Product Constraints\n\n",
-        "The system is subject to the following constraints:\n\n",
+        f"### 2.3 {translations['product_constraints']}\n\n",
+        f"{translations['system_constraints']}:\n\n",
 
-        "#### 2.3.1 Technical Constraints\n\n",
-        f"- **Technology Stack**: {project.technology_stack if project.technology_stack else 'To be determined'}\n",
-        f"- **Operating Systems**: {', '.join(project.operating_systems) if project.operating_systems else 'To be determined'}\n",
-        "- **Development Constraints**: The system must be delivered within the specified timeframe and budget\n\n",
+        f"#### 2.3.1 {translations['technical_constraints']}\n\n",
+        f"- **{translations['technology_stack']}**: {project.technology_stack if project.technology_stack else translations['tbd']}\n",
+        f"- **{translations['operating_systems']}**: {', '.join(project.operating_systems) if project.operating_systems else translations['tbd']}\n",
+        f"- **{translations['development_constraints']}**: {translations['dev_constraints_desc']}\n\n",
 
-        f"#### 2.3.2 Non-Functional Constraints\n\n{project.non_functional_requirements if project.non_functional_requirements else 'To be determined'}\n\n",
+        f"#### 2.3.2 {translations['nonfunctional_constraints']}\n\n{project.non_functional_requirements if project.non_functional_requirements else translations['tbd']}\n\n",
 
-        "### 2.4 User Characteristics\n\n",
-        f"{project.target_users if project.target_users else 'The system will serve the following types of users:'}\n\n",
+        f"### 2.4 {translations['user_characteristics']}\n\n",
+        f"{project.target_users if project.target_users else translations['user_types']}\n\n",
 
-        "### 2.5 Assumptions and Dependencies\n\n",
-        "The following assumptions have been made regarding the project:\n\n",
-        "- All necessary hardware will be available for development and testing\n",
-        "- Required third-party services will remain operational\n",
-        "- Stakeholders will be available to provide timely feedback\n\n",
+        f"### 2.5 {translations['assumptions']}\n\n",
+        f"{translations['assumptions_made']}:\n\n",
+        f"- {translations['assumption1']}\n",
+        f"- {translations['assumption2']}\n",
+        f"- {translations['assumption3']}\n\n",
 
-        "### 2.6 Apportioning of Requirements\n\n",
-        "Requirements have been prioritized as follows:\n\n",
-        "- **High Priority**: Requirements that must be implemented in the initial release\n",
-        "- **Medium Priority**: Requirements that should be implemented if time permits\n",
-        "- **Low Priority**: Requirements that can be deferred to future releases\n\n",
+        f"### 2.6 {translations['apportioning']}\n\n",
+        f"{translations['requirements_prioritized']}:\n\n",
+        f"- **{translations['high_priority']}**: {translations['high_priority_desc']}\n",
+        f"- **{translations['medium_priority']}**: {translations['medium_priority_desc']}\n",
+        f"- **{translations['low_priority']}**: {translations['low_priority_desc']}\n\n",
         f"{project.priority_modules if project.priority_modules else ''}\n\n"
     ]
 
 
-def generate_requirements_section(project, requirements):
+def generate_requirements_section(project, requirements, translations):
     functional_reqs = [r for r in requirements if r.category == REQUIREMENT_CATEGORY_FUNCTIONAL]
     ui_reqs = [r for r in requirements if r.category == REQUIREMENT_CATEGORY_UIUX]
     nonfunctional_reqs = [r for r in requirements if r.category == REQUIREMENT_CATEGORY_NONFUNCTIONAL]
     other_reqs = [r for r in requirements if r.category == REQUIREMENT_CATEGORY_OTHER]
 
     section = [
-        "## 3. Requirements\n\n",
-        "This section specifies the software product's requirements to a level of detail sufficient ",
-        "to enable designers to design a system that satisfies those requirements, and testers to ",
-        "test that the system satisfies those requirements.\n\n"
+        f"## 3. {translations['requirements']}\n\n",
+        f"{translations['requirements_desc']}\n\n"
     ]
-    section.extend([
-        "### 3.1 External Interfaces\n\n",
-        "This section defines all inputs into and outputs from the software system.\n\n",
 
-        "#### 3.1.1 User Interfaces\n\n",
-        "The system will provide the following user interfaces:\n\n"
+    section.extend([
+        f"### 3.1 {translations['external_interfaces']}\n\n",
+        f"{translations['external_interfaces_desc']}\n\n",
+
+        f"#### 3.1.1 {translations['user_interfaces']}\n\n",
+        f"{translations['ui_provided']}:\n\n"
     ])
+
     if ui_reqs:
         for i, req in enumerate(ui_reqs, 1):
             section.append(f"##### {req.handle or f'UI-{i}'}: {req.title}\n\n")
             section.append(f"{req.description}\n\n")
     else:
-        section.append("User interface requirements will be defined during the design phase.\n\n")
+        section.append(f"{translations['ui_tbd']}\n\n")
+
     section.extend([
-        "#### 3.1.2 Hardware Interfaces\n\n",
-        f"The system will run on {', '.join(project.operating_systems) if project.operating_systems else 'standard hardware platforms'}.\n\n",
-        "#### 3.1.3 Software Interfaces\n\n",
-        f"The system will interface with the following software systems:\n\n"
+        f"#### 3.1.2 {translations['hardware_interfaces']}\n\n",
+        f"{translations['hw_interface_desc']} {', '.join(project.operating_systems) if project.operating_systems else translations['standard_hw']}.\n\n",
+        f"#### 3.1.3 {translations['software_interfaces']}\n\n",
+        f"{translations['sw_interface_desc']}\n\n"
     ])
 
     if project.technology_stack:
@@ -603,164 +572,237 @@ def generate_requirements_section(project, requirements):
         for tech in tech_items:
             section.append(f"- {tech}\n")
     else:
-        section.append("Software interfaces will be defined during the design phase.\n\n")
-    section.append("\n### 3.2 Functional Requirements\n\n")
+        section.append(f"{translations['sw_interface_tbd']}\n\n")
+
+    section.append(f"\n### 3.2 {translations['functional_requirements']}\n\n")
+
     root_reqs = [r for r in functional_reqs if r.parent is None]
+
     for i, req in enumerate(root_reqs, 1):
-        section.extend(format_requirement_hierarchy(req, functional_reqs, i, "3.2"))
+        section.extend(format_requirement_hierarchy(req, functional_reqs, i, "3.2", translations))
 
     section.extend([
-        "\n### 3.3 Quality of Service\n\n",
-        "This section describes the quality-related property requirements.\n\n"
+        f"\n### 3.3 {translations['quality_of_service']}\n\n",
+        f"{translations['qos_desc']}\n\n"
     ])
+
     performance_reqs = [r for r in nonfunctional_reqs if r.requirement_type == REQUIREMENT_TYPE_PERFORMANCE]
     security_reqs = [r for r in nonfunctional_reqs if r.requirement_type == REQUIREMENT_TYPE_SECURITY]
     reliability_reqs = [r for r in nonfunctional_reqs if
                         not (r.requirement_type in [REQUIREMENT_TYPE_PERFORMANCE, REQUIREMENT_TYPE_SECURITY])]
-    section.append("#### 3.3.1 Performance\n\n")
+
+    section.append(f"#### 3.3.1 {translations['performance']}\n\n")
     if performance_reqs:
         for i, req in enumerate(performance_reqs, 1):
             section.append(f"##### {req.handle or f'PERF-{i}'}: {req.title}\n\n")
             section.append(f"{req.description}\n\n")
     else:
-        section.append("Performance requirements will be defined during the design phase.\n\n")
-    section.append("#### 3.3.2 Security\n\n")
+        section.append(f"{translations['performance_tbd']}\n\n")
+
+    section.append(f"#### 3.3.2 {translations['security']}\n\n")
     if security_reqs:
         for i, req in enumerate(security_reqs, 1):
             section.append(f"##### {req.handle or f'SEC-{i}'}: {req.title}\n\n")
             section.append(f"{req.description}\n\n")
     else:
-        section.append("Security requirements will be defined during the design phase.\n\n")
+        section.append(f"{translations['security_tbd']}\n\n")
+
     section.extend([
-        "#### 3.3.3 Reliability\n\n",
-        "The system shall operate reliably under normal operating conditions.\n\n",
-        "#### 3.3.4 Availability\n\n",
-        "The system shall be available during specified operating hours with minimal downtime.\n\n"
+        f"#### 3.3.3 {translations['reliability']}\n\n",
+        f"{translations['reliability_desc']}\n\n",
+        f"#### 3.3.4 {translations['availability']}\n\n",
+        f"{translations['availability_desc']}\n\n"
     ])
+
     section.extend([
-        "### 3.4 Compliance\n\n",
-        "The system shall comply with all relevant legal, regulatory, and industry standards.\n\n",
+        f"### 3.4 {translations['compliance']}\n\n",
+        f"{translations['compliance_desc']}\n\n",
 
-        "### 3.5 Design and Implementation\n\n",
-        "#### 3.5.1 Installation\n\n",
-        f"The {project.type_of_application} will be installed according to industry standard practices.\n\n",
+        f"### 3.5 {translations['design_implementation']}\n\n",
+        f"#### 3.5.1 {translations['installation']}\n\n",
+        f"{translations['installation_desc']} {get_application_type(project.type_of_application, translations)} {translations['installation_desc2']}\n\n",
 
-        "#### 3.5.2 Distribution\n\n",
-        f"The {project.type_of_application} will be distributed via appropriate channels for the target platforms.\n\n",
+        f"#### 3.5.2 {translations['distribution']}\n\n",
+        f"{translations['distribution_desc']} {get_application_type(project.type_of_application, translations)} {translations['distribution_desc2']}\n\n",
 
-        "#### 3.5.3 Maintainability\n\n",
-        "The code shall be written and documented to facilitate maintenance.\n\n",
+        f"#### 3.5.3 {translations['maintainability']}\n\n",
+        f"{translations['maintainability_desc']}\n\n",
 
-        "#### 3.5.4 Reusability\n\n",
-        "Components shall be designed with reusability in mind where appropriate.\n\n",
+        f"#### 3.5.4 {translations['reusability']}\n\n",
+        f"{translations['reusability_desc']}\n\n",
 
-        "#### 3.5.5 Portability\n\n",
-        f"The system shall be portable across {', '.join(project.operating_systems) if project.operating_systems else 'specified platforms'}.\n\n",
+        f"#### 3.5.5 {translations['portability']}\n\n",
+        f"{translations['portability_desc']} {', '.join(project.operating_systems) if project.operating_systems else translations['specified_platforms']}.\n\n",
 
-        "#### 3.5.6 Cost\n\n",
-        f"The estimated cost for development is {project.preliminary_budget if project.preliminary_budget else 'to be determined'}.\n\n",
+        f"#### 3.5.6 {translations['cost']}\n\n",
+        f"{translations['cost_desc']} {project.preliminary_budget if project.preliminary_budget else translations['tbd']}.\n\n",
 
-        "#### 3.5.7 Deadline\n\n"
+        f"#### 3.5.7 {translations['deadline']}\n\n"
     ])
 
     if project.deadline_start and project.deadline_end:
         section.append(
-            f"Development will commence on {project.deadline_start.strftime('%Y-%m-%d')} and is scheduled to be completed by {project.deadline_end.strftime('%Y-%m-%d')}.\n\n")
+            f"{translations['deadline_desc1']} {project.deadline_start.strftime('%Y-%m-%d')} {translations['deadline_desc2']} {project.deadline_end.strftime('%Y-%m-%d')}.\n\n")
     elif project.deadline_end:
-        section.append(f"The project is scheduled to be completed by {project.deadline_end.strftime('%Y-%m-%d')}.\n\n")
+        section.append(f"{translations['deadline_desc3']} {project.deadline_end.strftime('%Y-%m-%d')}.\n\n")
     else:
-        section.append("The project deadline will be determined in the project planning phase.\n\n")
+        section.append(f"{translations['deadline_tbd']}\n\n")
 
-    section.append("#### 3.5.8 Proof of Concept\n\n")
-    section.append(
-        "A prototype or proof of concept may be developed to validate key technical aspects of the system.\n\n")
+    section.append(f"#### 3.5.8 {translations['proof_of_concept']}\n\n")
+    section.append(f"{translations['poc_desc']}\n\n")
 
     return section
 
 
-def format_requirement_hierarchy(requirement, all_reqs, index, prefix):
+def generate_verification_section(requirements, translations):
+    verification = [
+        f"## 4. {translations['verification']}\n\n",
+        f"{translations['verification_desc1']} ",
+        f"{translations['verification_desc2']} ",
+        f"{translations['verification_desc3']}\n\n",
+        f"### 4.1 {translations['verification_approach']}\n\n",
+        f"{translations['verification_methods']}:\n\n",
+        f"- **{translations['inspection']}**: {translations['inspection_desc']}\n",
+        f"- **{translations['analysis']}**: {translations['analysis_desc']}\n",
+        f"- **{translations['demonstration']}**: {translations['demonstration_desc']}\n",
+        f"- **{translations['test']}**: {translations['test_desc']}\n\n",
+        f"### 4.2 {translations['verification_matrix']}\n\n",
+        f"{translations['traceability_matrix']}\n\n",
+        f"| {translations['requirement_id']} | {translations['verification_method']} | {translations['success_criteria']} | {translations['status']} |\n",
+        "| -------------- | ------------------- | ---------------- | ------ |\n"
+    ]
+
+    for req in requirements:
+        verification.append(
+            f"| {req.handle or 'REQ-' + str(req.id)[:8]} | {translations['test']} | {translations['all_criteria']} | {translations['pending']} |\n")
+    verification.append("\n")
+
+    return verification
+
+
+def generate_appendixes_section(project, translations):
+    appendixes = [
+        f"## 5. {translations['appendixes']}\n\n",
+        f"### 5.1 {translations['glossary']}\n\n",
+        f"| {translations['term']} | {translations['definition']} |\n",
+        "| ---- | ---------- |\n",
+        f"| SRS | {translations['srs_definition']} |\n",
+        f"| {project.type_of_application.upper()} | {get_application_type_description(project.type_of_application, translations)} |\n\n",
+        f"### 5.2 {translations['referenced_documents']}\n\n",
+        f"1. IEEE Std 830-1998, {translations['ieee_reference']}\n",
+        f"2. {translations['project_charter']}\n",
+        f"3. {translations['business_requirements']}\n\n",
+        f"### 5.3 {translations['uml_diagrams']}\n\n",
+        f"{translations['uml_available']}\n\n",
+        f"### 5.4 {translations['mockups']}\n\n",
+        f"{translations['mockups_available']}\n\n"
+    ]
+
+    return appendixes
+
+
+def format_requirement_hierarchy(requirement, all_reqs, index, prefix, translations):
     result = []
+
     req_id = f"{prefix}.{index}"
     result.append(f"#### {req_id} {requirement.handle or ''}: {requirement.title}\n\n")
-    result.append(f"**Description**: {requirement.description}\n\n")
-    result.append(f"**Type**: {requirement.requirement_type}\n")
-    result.append(f"**Status**: {requirement.status}\n")
-    result.append(f"**Version**: {requirement.version_number}\n\n")
+    result.append(f"**{translations['description']}**: {requirement.description}\n\n")
+
+    result.append(f"**{translations['type']}**: {requirement.requirement_type}\n")
+    result.append(f"**{translations['status']}**: {requirement.status}\n")
+    result.append(f"**{translations['version']}**: {requirement.version_number}\n\n")
+
     user_stories = UserStory.objects.filter(requirement=requirement, status__in=[STATUS_ACTIVE, STATUS_DRAFT])
     if user_stories.exists():
-        result.append("**User Stories**:\n\n")
+        result.append(f"**{translations['user_stories']}**:\n\n")
         for story in user_stories:
-            result.append(f"- As a {story.role}, I want to {story.action} so that {story.benefit}\n")
+            result.append(
+                f"- {translations['as_a']} {story.role}, {translations['i_want_to']} {story.action} {translations['so_that']} {story.benefit}\n")
             if story.acceptance_criteria:
-                result.append("  **Acceptance Criteria**:\n")
+                result.append(f"  **{translations['acceptance_criteria']}**:\n")
                 for criterion in story.acceptance_criteria:
                     result.append(f"  - {criterion}\n")
         result.append("\n")
 
     mockups = Mockup.objects.filter(requirement=requirement, status=STATUS_ACTIVE)
     if mockups.exists():
-        result.append("**Mockups**: Available in the project repository\n\n")
+        result.append(f"**{translations['mockups']}**: {translations['available_in_repo']}\n\n")
+
     comments = RequirementComment.objects.filter(requirement=requirement, status=STATUS_ACTIVE)
     if comments.exists():
-        result.append("**Notes**:\n\n")
+        result.append(f"**{translations['notes']}**:\n\n")
         for comment in comments:
-            result.append(f"- {comment.text} (by {comment.user.username}, {comment.created_at.strftime('%Y-%m-%d')})\n")
+            result.append(
+                f"- {comment.text} ({translations['by']} {comment.user.username}, {comment.created_at.strftime('%Y-%m-%d')})\n")
         result.append("\n")
+
     children = [r for r in all_reqs if r.parent and r.parent.id == requirement.id]
     for i, child in enumerate(children, 1):
         child_prefix = f"{req_id}"
-        child_result = format_requirement_hierarchy(child, all_reqs, i, child_prefix)
+        child_result = format_requirement_hierarchy(child, all_reqs, i, child_prefix, translations)
         result.extend(child_result)
 
     result.append("---\n\n")
     return result
 
 
-def get_application_type_description(app_type):
+def get_application_type_description(app_type, translations):
     descriptions = {
-        PROJECT_TYPE_WEBSITE: "Web-based application accessible through standard browsers",
-        PROJECT_TYPE_MOBILE: "Mobile application for smartphones and tablets",
-        PROJECT_TYPE_DESKTOP: "Software application that runs on desktop computers",
-        PROJECT_TYPE_API: "Application Programming Interface for system integration",
-        PROJECT_TYPE_OTHER: "Custom software application"
+        PROJECT_TYPE_WEBSITE: translations['website_desc'],
+        PROJECT_TYPE_MOBILE: translations['mobile_desc'],
+        PROJECT_TYPE_DESKTOP: translations['desktop_desc'],
+        PROJECT_TYPE_API: translations['api_desc'],
+        PROJECT_TYPE_OTHER: translations['other_desc']
     }
-    return descriptions.get(app_type, "Software application")
+    return descriptions.get(app_type, translations['software_app'])
 
 
-def get_application_context(app_type):
+def get_application_type(app_type, translations):
+    types = {
+        PROJECT_TYPE_WEBSITE: translations['website'],
+        PROJECT_TYPE_MOBILE: translations['mobile_app'],
+        PROJECT_TYPE_DESKTOP: translations['desktop_app'],
+        PROJECT_TYPE_API: translations['api_service'],
+        PROJECT_TYPE_OTHER: translations['other_app']
+    }
+    return types.get(app_type, translations['software_app'])
+
+
+def get_application_context(app_type, translations):
     contexts = {
-        PROJECT_TYPE_WEBSITE: "web browsers and internet services",
-        PROJECT_TYPE_MOBILE: "mobile operating systems and app stores",
-        PROJECT_TYPE_DESKTOP: "desktop operating systems",
-        PROJECT_TYPE_API: "networked systems and services",
-        PROJECT_TYPE_OTHER: "its target environment"
+        PROJECT_TYPE_WEBSITE: translations['web_context'],
+        PROJECT_TYPE_MOBILE: translations['mobile_context'],
+        PROJECT_TYPE_DESKTOP: translations['desktop_context'],
+        PROJECT_TYPE_API: translations['api_context'],
+        PROJECT_TYPE_OTHER: translations['other_context']
     }
-    return contexts.get(app_type, "its operating environment")
+    return contexts.get(app_type, translations['op_environment'])
 
 
-def generate_system_context_diagram(project):
+def generate_system_context_diagram(project, translations):
     return (
-        "**System Context Diagram**:\n\n"
-        "The following diagram illustrates the system context:\n\n"
+        f"**{translations['system_context_diagram']}**:\n\n"
+        f"{translations['diagram_illustrates']}:\n\n"
         "```\n"
         f"    ┌────────────────┐      ┌────────────────┐\n"
         f"    │                │      │                │\n"
-        f"    │     Users      │◄────►│  {project.name.ljust(12)}  │\n"
+        f"    │     {translations['users']}      │◄────►│  {project.name.ljust(12)}  │\n"
         f"    │                │      │                │\n"
         f"    └────────────────┘      └───────┬────────┘\n"
         f"                                     │\n"
         f"                                     ▼\n"
         f"                            ┌────────────────┐\n"
-        f"                            │   External     │\n"
-        f"                            │   Systems      │\n"
+        f"                            │   {translations['external']}     │\n"
+        f"                            │   {translations['systems']}      │\n"
         f"                            │                │\n"
         f"                            └────────────────┘\n"
         "```\n\n"
     )
 
 
-def generate_product_functions(project):
+def generate_product_functions(project, translations):
     functions = []
+
     requirements = Requirement.objects.filter(
         project_id=project.id,
         status__in=[STATUS_ACTIVE, STATUS_DRAFT],
@@ -771,7 +813,8 @@ def generate_product_functions(project):
         for req in requirements[:5]:
             functions.append(f"- {req.title}\n")
         if requirements.count() > 5:
-            functions.append(f"- And {requirements.count() - 5} additional functions\n")
+            functions.append(
+                f"- {translations['and']} {requirements.count() - 5} {translations['additional_functions']}\n")
     elif project.priority_modules:
         modules = project.priority_modules.split('\n')
         for module in modules:
@@ -780,31 +823,31 @@ def generate_product_functions(project):
     else:
         if project.type_of_application == PROJECT_TYPE_WEBSITE:
             functions = [
-                "- User registration and authentication\n",
-                "- Content management\n",
-                "- Search functionality\n",
-                "- Responsive design for various devices\n"
+                f"- {translations['user_auth']}\n",
+                f"- {translations['content_management']}\n",
+                f"- {translations['search']}\n",
+                f"- {translations['responsive_design']}\n"
             ]
         elif project.type_of_application == PROJECT_TYPE_MOBILE:
             functions = [
-                "- User authentication\n",
-                "- Push notifications\n",
-                "- Offline functionality\n",
-                "- Mobile-specific features (location, camera, etc.)\n"
+                f"- {translations['user_auth']}\n",
+                f"- {translations['push_notifications']}\n",
+                f"- {translations['offline_function']}\n",
+                f"- {translations['mobile_features']}\n"
             ]
         elif project.type_of_application == PROJECT_TYPE_API:
             functions = [
-                "- Authentication and authorization\n",
-                "- Data retrieval endpoints\n",
-                "- Data manipulation endpoints\n",
-                "- API documentation\n"
+                f"- {translations['auth_authz']}\n",
+                f"- {translations['data_retrieval']}\n",
+                f"- {translations['data_manipulation']}\n",
+                f"- {translations['api_docs']}\n"
             ]
         else:
             functions = [
-                "- Core functionality\n",
-                "- User interaction\n",
-                "- Data management\n",
-                "- Reporting and analytics\n"
+                f"- {translations['core_function']}\n",
+                f"- {translations['user_interaction']}\n",
+                f"- {translations['data_management']}\n",
+                f"- {translations['reporting']}\n"
             ]
 
     return "".join(functions) + "\n"
@@ -850,7 +893,7 @@ def generate_development_plan_task(project_id, user_id=None):
             f"Preliminary Budget: {project.preliminary_budget if project.preliminary_budget else 'Not specified'}\n"
             f"Deadline: {'From ' + project.deadline_start.strftime('%Y-%m-%d') if project.deadline_start else ''} {'To ' + project.deadline_end.strftime('%Y-%m-%d') if project.deadline_end else ''}\n\n"
             f"Requirements ({len(prompt_data)}):\n"
-            f"{json.dumps(prompt_data, indent=2)}\n\n"
+            f"{json.dumps(prompt_data, indent=2, ensure_ascii=False)}\n\n"
             f"Task: Create a detailed development plan for this project based on the provided requirements.\n\n"
             f"Guidelines:\n"
             f"1. Break down the work by appropriate roles (developers, designers, QA, etc.)\n"
@@ -914,7 +957,7 @@ def generate_development_plan_task(project_id, user_id=None):
         dv = DevelopmentPlanVersion.objects.create(
             plan=plan,
             version_number=next_version,
-            roles_and_hours=json.dumps(formatted_roles_hours),
+            roles_and_hours=json.dumps(formatted_roles_hours, ensure_ascii=False),
             estimated_cost=total_cost,
             notes=notes,
             created_by=user,
@@ -925,8 +968,6 @@ def generate_development_plan_task(project_id, user_id=None):
         if plan.status == STATUS_ARCHIVED:
             plan.status = STATUS_DRAFT
         plan.save()
-
-        # Chain UML diagrams generation for all diagram types
         for diagram_type in [UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY, UML_DIAGRAM_TYPE_COMPONENT]:
             generate_uml_diagrams_task.delay(str(project.id), diagram_type=diagram_type, plan_version_id=str(dv.id))
 
@@ -1370,7 +1411,17 @@ def _generate_mockup_from_prompt(prompt):
         return {"error": "No HTML content generated", "detail": parsed_data}
     html_content = html_content.replace("<script", "<!-- script").replace("</script>", "<!-- /script -->")
     html_content = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8"/>
+            <title>{name}</title>
+            <script src="https://cdn.tailwindcss.com/"></script>
+        </head>
+        <body class="bg-gray-100 text-gray-800">
         {html_content}
+        </body>
+        </html>
     """
 
     return {

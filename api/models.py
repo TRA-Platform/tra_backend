@@ -414,6 +414,7 @@ class SrsExport(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='exports')
     template = models.ForeignKey(SrsTemplate, on_delete=models.SET_NULL, null=True, blank=True)
     content = models.TextField()
+    url = models.URLField(default="", blank=True)
     fmt = models.CharField(max_length=10, default=SRS_FORMAT_PDF, choices=SRS_FORMAT_CHOICES)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
