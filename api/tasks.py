@@ -15,10 +15,12 @@ from .models import (
     GENERATION_STATUS_FAILED, UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY,
     UML_DIAGRAM_TYPE_COMPONENT, PROJECT_TYPE_API, PROJECT_TYPE_MOBILE, PROJECT_TYPE_WEBSITE, PROJECT_TYPE_DESKTOP,
     PROJECT_TYPE_OTHER, RequirementComment, REQUIREMENT_TYPE_PERFORMANCE, REQUIREMENT_TYPE_SECURITY, LANGUAGE_ENGLISH,
-    LANGUAGE_RUSSIAN, LANGUAGE_GERMAN
+    LANGUAGE_RUSSIAN, LANGUAGE_GERMAN, SRS_FORMAT_MARKDOWN
 )
 from gpt.adapter import GptClient
 from .srs_translations import get_translations
+from django.conf import settings
+from .s3_utils import upload_to_s3, generate_export_filename
 
 app = current_app._get_current_object()
 logger = logging.getLogger(__name__)
@@ -369,10 +371,21 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
     requirements = project.requirements.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
     content = generate_srs_document(project, requirements, creator)
 
+    if fmt == SRS_FORMAT_MARKDOWN:
+        try:
+            filename = generate_export_filename(project.name, str(export.id), file_extension='md')
+            url = upload_to_s3(content, filename, settings.S3_BUCKET_NAME)
+            export.url = url
+        except Exception as e:
+            logger.error(f"Failed to upload to S3: {str(e)}")
+            export.status = STATUS_ARCHIVED
+            export.save()
+            return {"error": f"Failed to upload to S3: {str(e)}"}
+
     export.content = content
     export.save()
 
-    return {"success": True, "export_id": str(export.id), "format": fmt}
+    return {"success": True, "export_id": str(export.id), "format": fmt, "url": export.url if fmt == SRS_FORMAT_MARKDOWN else None}
 
 
 def generate_srs_document(project, requirements, creator=None):

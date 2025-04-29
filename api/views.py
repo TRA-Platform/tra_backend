@@ -8,7 +8,8 @@ from webauth.permissions import AdminPermission, ManagerPermission, ModeratorPer
 from .models import (
     SrsTemplate, Project, Requirement, RequirementComment,
     DevelopmentPlan, DevelopmentPlanVersion, Mockup, MockupHistory,
-    UserStory, UserStoryComment, UserStoryHistory, UmlDiagram, UML_DIAGRAM_TYPE_CHOICES
+    UserStory, UserStoryComment, UserStoryHistory, UmlDiagram, UML_DIAGRAM_TYPE_CHOICES, SRS_FORMAT_PDF,
+    SRS_FORMAT_MARKDOWN
 )
 from .serializers import (
     SrsTemplateSerializer, ProjectSerializer, RequirementSerializer, RequirementCommentSerializer,
@@ -71,7 +72,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def export_srs(self, request, pk=None):
         u = request.user
         p = self.get_object()
-        fmt = request.data.get("format", "pdf")
+        fmt = request.data.get("format", SRS_FORMAT_MARKDOWN)
         export_srs_task.delay(
             str(p.id),
             created_by=u.id,

@@ -61,13 +61,13 @@ REQUIREMENT_TYPE_CHOICES = [
 SRS_FORMAT_PDF = "pdf"
 SRS_FORMAT_DOCX = "docx"
 SRS_FORMAT_HTML = "html"
-SR_FORMAT_MARKDOWN = "md"
+SRS_FORMAT_MARKDOWN = "md"
 
 SRS_FORMAT_CHOICES = [
     (SRS_FORMAT_PDF, "PDF"),
     (SRS_FORMAT_DOCX, "DOCX"),
     (SRS_FORMAT_HTML, "HTML"),
-    (SR_FORMAT_MARKDOWN, "Markdown"),
+    (SRS_FORMAT_MARKDOWN, "Markdown"),
 ]
 
 LANGUAGE_ENGLISH = "en"
@@ -181,7 +181,7 @@ class Requirement(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='requirements')
     parent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='children')
-    handle = models.CharField(max_length=50, unique=True, null=True, blank=True)
+    handle = models.CharField(max_length=50, null=True, blank=True)
     title = models.CharField(max_length=255)
     description = models.TextField()
     category = models.CharField(

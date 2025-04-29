@@ -226,3 +226,10 @@ CORS_ALLOW_METHODS = [
     "POST",
     "PUT",
 ]
+
+S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "")
+S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "")
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "https://hb.vkcloud-storage.ru") # https://hb.vkcloud-storage.ru
+S3_REGION = os.getenv("S3_REGION", "ru-msk") # ru-msk
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "trastatic")
+S3_UPLOAD_URL = os.getenv("S3_UPLOAD_URL", "https://trastatic.hydralabs.ru")

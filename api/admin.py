@@ -8,7 +8,7 @@ from .models import (
     SrsTemplate, Project, Requirement, RequirementHistory, UserStory,
     UserStoryHistory, UserStoryComment, RequirementComment, DevelopmentPlan,
     DevelopmentPlanVersion, UmlDiagram, Mockup, MockupHistory, SrsExport,
-    SRS_FORMAT_PDF, SRS_FORMAT_DOCX, SRS_FORMAT_HTML, SR_FORMAT_MARKDOWN
+    SRS_FORMAT_PDF, SRS_FORMAT_DOCX, SRS_FORMAT_HTML, SRS_FORMAT_MARKDOWN
 )
 from .tasks import (
     generate_requirements_task, export_srs_task, generate_development_plan_task,
@@ -105,7 +105,7 @@ def admin_export_srs_markdown(modeladmin, request, queryset):
         export_srs_task.delay(
             str(project.id),
             created_by=request.user.id,
-            fmt=SR_FORMAT_MARKDOWN,
+            fmt=SRS_FORMAT_MARKDOWN,
         )
         modeladmin.message_user(
             request,
@@ -778,7 +778,7 @@ class SrsExportAdmin(admin.ModelAdmin):
             (SRS_FORMAT_PDF, "PDF"),
             (SRS_FORMAT_DOCX, "DOCX"),
             (SRS_FORMAT_HTML, "HTML"),
-            (SR_FORMAT_MARKDOWN, "Markdown"),
+            (SRS_FORMAT_MARKDOWN, "Markdown"),
         ])
         return format_dict.get(obj.fmt, obj.fmt)
 
