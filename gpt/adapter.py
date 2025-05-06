@@ -35,7 +35,12 @@ class GptClient:
             response = self.session.post(url=endpoint, json=data)
             logger.error(f"Sent request: {response.text}")
             response.raise_for_status()
-            return response.json(), response.status_code
+            response_json = response.json()
+            if is_json:
+                answer = json.loads(response_json.get('answer', '{}'))
+            else:
+                answer = response_json.get('answer', '')
+            return answer, response.status_code
         except json.JSONDecodeError as e:
             return {
                 "error": f"Error decoding JSON: {e}",

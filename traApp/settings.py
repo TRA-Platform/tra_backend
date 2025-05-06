@@ -201,8 +201,8 @@ ADMINS = [
 ]
 DEFAULT_ADMIN_PASSWORD = os.getenv('DEFAULT_ADMIN_PASSWORD', 'admin')
 SUB_ROUTE = os.getenv("SUB_ROUTE", "ocr-service")
-
-STATIC_URL = f'{SUB_ROUTE}/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'static')
+STATIC_URL = os.getenv('STATIC_URL', f'{SUB_ROUTE}/static/')
 CSRF_TRUSTED_ORIGINS = [
     f'https://{DOMAIN}',
     'http://localhost:8000',
@@ -226,3 +226,10 @@ CORS_ALLOW_METHODS = [
     "POST",
     "PUT",
 ]
+
+S3_ACCESS_KEY = os.getenv("S3_ACCESS_KEY", "")
+S3_SECRET_KEY = os.getenv("S3_SECRET_KEY", "")
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", "https://hb.vkcloud-storage.ru") # https://hb.vkcloud-storage.ru
+S3_REGION = os.getenv("S3_REGION", "ru-msk") # ru-msk
+S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME", "trastatic")
+S3_UPLOAD_URL = os.getenv("S3_UPLOAD_URL", "https://trastatic.hydralabs.ru")

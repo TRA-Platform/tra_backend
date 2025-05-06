@@ -61,13 +61,13 @@ REQUIREMENT_TYPE_CHOICES = [
 SRS_FORMAT_PDF = "pdf"
 SRS_FORMAT_DOCX = "docx"
 SRS_FORMAT_HTML = "html"
-SR_FORMAT_MARKDOWN = "md"
+SRS_FORMAT_MARKDOWN = "md"
 
 SRS_FORMAT_CHOICES = [
     (SRS_FORMAT_PDF, "PDF"),
     (SRS_FORMAT_DOCX, "DOCX"),
     (SRS_FORMAT_HTML, "HTML"),
-    (SR_FORMAT_MARKDOWN, "Markdown"),
+    (SRS_FORMAT_MARKDOWN, "Markdown"),
 ]
 
 LANGUAGE_ENGLISH = "en"
@@ -104,6 +104,17 @@ GENERATION_STATUS_CHOICES = [
     (GENERATION_STATUS_FAILED, "Failed"),
 ]
 
+UML_DIAGRAM_TYPE_CLASS = "class"
+UML_DIAGRAM_TYPE_SEQUENCE = "sequence"
+UML_DIAGRAM_TYPE_ACTIVITY = "activity"
+UML_DIAGRAM_TYPE_COMPONENT = "component"
+UML_DIAGRAM_TYPE_CHOICES = [
+    (UML_DIAGRAM_TYPE_CLASS, "Class Diagram"),
+    (UML_DIAGRAM_TYPE_SEQUENCE, "Sequence Diagram"),
+    (UML_DIAGRAM_TYPE_ACTIVITY, "Activity Diagram"),
+    (UML_DIAGRAM_TYPE_COMPONENT, "Component Diagram"),
+]
+
 
 class SrsTemplate(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -114,7 +125,7 @@ class SrsTemplate(models.Model):
         max_length=20, choices=TEMPLATE_TYPE_CHOICES, default=TEMPLATE_TYPE_DEFAULT
     )
     tags = models.JSONField(default=list, blank=True)
-    preview_image = models.TextField(blank=True)  # Base64 encoded image or URL
+    preview_image = models.TextField(blank=True)
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE,
     )
@@ -142,14 +153,12 @@ class Project(models.Model):
     additional_requirements = models.TextField(blank=True)
     non_functional_requirements = models.TextField(blank=True)
     technology_stack = models.TextField(blank=True)
-    operating_systems = models.JSONField(default=list, blank=True)  # List of operating systems
+    operating_systems = models.JSONField(default=list, blank=True)
     priority_modules = models.TextField(blank=True)
     deadline_start = models.DateTimeField(null=True, blank=True)
     deadline_end = models.DateTimeField(null=True, blank=True)
     preliminary_budget = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     scope = models.TextField(blank=True)
-
-    # Generation status tracking
     generation_status = models.CharField(
         max_length=20, choices=GENERATION_STATUS_CHOICES, default=GENERATION_STATUS_PENDING
     )
@@ -172,6 +181,7 @@ class Requirement(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='requirements')
     parent = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='children')
+    handle = models.CharField(max_length=50, null=True, blank=True)
     title = models.CharField(max_length=255)
     description = models.TextField()
     category = models.CharField(
@@ -202,7 +212,8 @@ class RequirementHistory(models.Model):
     title = models.CharField(max_length=255)
     description = models.TextField()
     category = models.CharField(max_length=50)
-    requirement_type = models.CharField(max_length=50)
+    requirement_type = models.CharField(max_length=50, choices=REQUIREMENT_TYPE_CHOICES,
+                                        default=REQUIREMENT_TYPE_FEATURE)
     version_number = models.IntegerField()
     changed_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     changed_at = models.DateTimeField(auto_now_add=True)
@@ -215,13 +226,11 @@ class RequirementHistory(models.Model):
 class UserStory(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     requirement = models.ForeignKey(Requirement, on_delete=models.CASCADE, related_name='user_stories')
-    role = models.CharField(max_length=100)  # "As a [role]"
-    action = models.TextField()  # "I want to [action]"
-    benefit = models.TextField()  # "So that [benefit]"
-    acceptance_criteria = models.JSONField(default=list, blank=True)  # List of acceptance criteria
+    role = models.CharField(max_length=100)
+    action = models.TextField()
+    benefit = models.TextField()
+    acceptance_criteria = models.JSONField(default=list, blank=True)
     version_number = models.IntegerField(default=1)
-
-    # Generation status
     generation_status = models.CharField(
         max_length=20, choices=GENERATION_STATUS_CHOICES, default=GENERATION_STATUS_PENDING
     )
@@ -296,7 +305,7 @@ class DevelopmentPlan(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     project = models.OneToOneField(Project, on_delete=models.CASCADE, related_name='development_plan')
     current_version_number = models.IntegerField(default=1)
-    hourly_rates = models.JSONField(default=dict, blank=True)  # Dictionary of role:rate pairs
+    hourly_rates = models.JSONField(default=dict, blank=True)
 
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT,
@@ -330,11 +339,10 @@ class UmlDiagram(models.Model):
     plan_version = models.ForeignKey(DevelopmentPlanVersion, on_delete=models.SET_NULL, null=True, blank=True,
                                      related_name='uml_diagrams')
     name = models.CharField(max_length=200)
-    diagram_type = models.CharField(max_length=50)  # class, sequence, activity, etc.
-    content = models.TextField()  # SVG or other format
+    diagram_type = models.CharField(max_length=50, choices=UML_DIAGRAM_TYPE_CHOICES, default=UML_DIAGRAM_TYPE_CLASS)
+    content = models.TextField()
+    # url = models.URLField(default="", blank=True)
     notes = models.TextField(blank=True)
-
-    # Generation status
     generation_status = models.CharField(
         max_length=20, choices=GENERATION_STATUS_CHOICES, default=GENERATION_STATUS_PENDING
     )
@@ -368,8 +376,6 @@ class Mockup(models.Model):
     html_content = models.TextField(blank=True)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     version_number = models.IntegerField(default=1)
-
-    # Generation status
     generation_status = models.CharField(
         max_length=20, choices=GENERATION_STATUS_CHOICES, default=GENERATION_STATUS_PENDING
     )
@@ -409,6 +415,7 @@ class SrsExport(models.Model):
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='exports')
     template = models.ForeignKey(SrsTemplate, on_delete=models.SET_NULL, null=True, blank=True)
     content = models.TextField()
+    url = models.URLField(default="", blank=True)
     fmt = models.CharField(max_length=10, default=SRS_FORMAT_PDF, choices=SRS_FORMAT_CHOICES)
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

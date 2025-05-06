@@ -1,10 +1,12 @@
+from openai import project
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from .models import (
     SrsTemplate, Project, Requirement, RequirementHistory,
     RequirementComment, DevelopmentPlan, DevelopmentPlanVersion,
     Mockup, MockupHistory, UserStory, UserStoryHistory, UserStoryComment,
-    UmlDiagram
+    UmlDiagram, STATUS_ARCHIVED, UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_ACTIVITY, UML_DIAGRAM_TYPE_SEQUENCE,
+    UML_DIAGRAM_TYPE_COMPONENT, SrsExport
 )
 
 
@@ -15,11 +17,26 @@ class SrsTemplateSerializer(serializers.ModelSerializer):
 
 
 class UmlDiagramSerializer(serializers.ModelSerializer):
+    generation_details = serializers.SerializerMethodField()
+
     class Meta:
         model = UmlDiagram
         fields = "__all__"
         read_only_fields = ("id", "created_at", "updated_at", "generation_status",
-                            "generation_started_at", "generation_completed_at", "generation_error")
+                            "generation_started_at", "generation_completed_at", "generation_error",
+                            "generation_details")
+
+    def get_generation_details(self, obj):
+        return {
+            "status": obj.generation_status,
+            "started_at": obj.generation_started_at,
+            "completed_at": obj.generation_completed_at,
+            "error": obj.generation_error,
+            "duration": (obj.generation_completed_at - obj.generation_started_at).total_seconds()
+            if obj.generation_completed_at and obj.generation_started_at else None,
+            "is_valid": bool(obj.content and "@startuml" in obj.content and "@enduml" in obj.content),
+            "content_length": len(obj.content) if obj.content else 0
+        }
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -52,6 +69,7 @@ class UserStoryCommentSerializer(serializers.ModelSerializer):
 class UserStorySerializer(serializers.ModelSerializer):
     history = UserStoryHistorySerializer(many=True, read_only=True)
     comments = UserStoryCommentSerializer(many=True, read_only=True)
+    requirement = serializers.SerializerMethodField()
 
     class Meta:
         model = UserStory
@@ -86,6 +104,9 @@ class UserStorySerializer(serializers.ModelSerializer):
         instance.version_number += 1
         instance.save()
         return instance
+
+    def get_requirement(self, obj):
+        return obj.requirement.title
 
 
 class MockupHistorySerializer(serializers.ModelSerializer):
@@ -159,11 +180,29 @@ class MockupSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
+class SrsExportSerializer(serializers.ModelSerializer):
+    created_by = UserSerializer(read_only=True)
+    template = SrsTemplateSerializer(read_only=True)
+
+    class Meta:
+        model = SrsExport
+        fields = (
+            "id", "status", "template",
+            "url", "fmt", "created_by", "created_at"
+        )
+        read_only_fields = (
+            "id", "created_by", "created_at", "url"
+        )
+
+    def create(self, validated_data):
+        validated_data["created_by"] = self.context["request"].user
+        return super().create(validated_data)
+
 
 class RequirementDetailSerializer(serializers.ModelSerializer):
     history = RequirementHistorySerializer(many=True, read_only=True)
     comments = RequirementCommentSerializer(many=True, read_only=True)
-    user_stories = UserStorySerializer(many=True, read_only=True)
+    user_stories = serializers.SerializerMethodField()
     mockups = MockupSerializer(many=True, read_only=True)
     parent = serializers.SerializerMethodField()
     children = serializers.SerializerMethodField()
@@ -171,12 +210,18 @@ class RequirementDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Requirement
         fields = (
-            "id", "project", "parent", "children", "title", "description",
+            "id", "project", "parent", "children", "title", "handle", "description",
             "category", "requirement_type", "version_number", "status",
             "created_at", "updated_at", "history", "comments", "user_stories", "mockups"
         )
         read_only_fields = ("id", "version_number", "created_at", "updated_at",
-                            "history", "comments", "user_stories", "mockups")
+                            "history", "comments", "user_stories", "mockups", "handle")
+
+    def get_user_stories(self, obj):
+        user_stories = UserStory.objects.filter(
+            requirement=obj,
+        ).exclude(status=STATUS_ARCHIVED)
+        return UserStorySerializer(user_stories, many=True).data
 
     def get_parent(self, obj):
         if obj.parent:
@@ -225,20 +270,37 @@ class RequirementSerializer(serializers.ModelSerializer):
     class Meta:
         model = Requirement
         fields = (
-            "id", "project", "parent", "title", "description", "category",
+            "id", "project", "parent", "title", "handle", "description", "category",
             "requirement_type", "version_number", "status", "created_at", "updated_at"
         )
-        read_only_fields = ("id", "version_number", "created_at", "updated_at")
+        read_only_fields = ("id", "version_number", "created_at", "updated_at", "handle")
 
 
 class DevelopmentPlanVersionSerializer(serializers.ModelSerializer):
     created_by = UserSerializer(read_only=True)
     uml_diagrams = UmlDiagramSerializer(many=True, read_only=True)
+    generation_progress = serializers.SerializerMethodField()
 
     class Meta:
         model = DevelopmentPlanVersion
         fields = "__all__"
-        read_only_fields = ("id", "created_at", "created_by", "uml_diagrams")
+        read_only_fields = ("id", "created_at", "created_by", "uml_diagrams", "generation_progress")
+
+    def get_generation_progress(self, obj):
+        diagrams = UmlDiagram.objects.filter(plan_version=obj)
+        total_diagrams = diagrams.count()
+        completed_diagrams = diagrams.filter(generation_status=STATUS_ARCHIVED).count()
+
+        return {
+            "total_diagrams": total_diagrams,
+            "completed_diagrams": completed_diagrams,
+            "progress_percentage": (completed_diagrams / total_diagrams * 100) if total_diagrams > 0 else 0,
+            "diagram_types": {
+                diagram_type: diagrams.filter(diagram_type=diagram_type).count()
+                for diagram_type in [UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE,
+                                     UML_DIAGRAM_TYPE_ACTIVITY, UML_DIAGRAM_TYPE_COMPONENT]
+            }
+        }
 
 
 class DevelopmentPlanSerializer(serializers.ModelSerializer):
@@ -269,10 +331,13 @@ class ProjectListSerializer(serializers.ModelSerializer):
 
 class ProjectSerializer(serializers.ModelSerializer):
     created_by = UserSerializer(read_only=True)
-    requirements = RequirementSerializer(many=True, read_only=True)
-    mockups = MockupSerializer(many=True, read_only=True)
+    requirements = RequirementDetailSerializer(many=True, read_only=True)
+    mockups = serializers.SerializerMethodField()
     development_plan = DevelopmentPlanSerializer(read_only=True)
     uml_diagrams = UmlDiagramSerializer(many=True, read_only=True)
+    user_stories = serializers.SerializerMethodField()
+    generation_progress = serializers.SerializerMethodField()
+    srs_exports = serializers.SerializerMethodField()
 
     class Meta:
         model = Project
@@ -285,14 +350,69 @@ class ProjectSerializer(serializers.ModelSerializer):
             "scope", "generation_status", "generation_started_at",
             "generation_completed_at", "generation_error", "status",
             "created_at", "updated_at", "requirements", "mockups",
-            "development_plan", "uml_diagrams"
+            "development_plan", "uml_diagrams", "user_stories", "generation_progress",
+            "srs_exports"
         )
         read_only_fields = (
             "id", "created_by", "created_at", "updated_at", "requirements",
             "generation_status", "generation_started_at", "generation_completed_at",
-            "generation_error"
+            "generation_error", "generation_progress", "srs_exports"
         )
 
     def create(self, validated_data):
+        print(validated_data)
         validated_data["created_by"] = self.context["request"].user
-        return super().create(validated_data)
+        project = super().create(validated_data)
+        from .tasks import generate_requirements_task
+        generate_requirements_task.delay(str(project.id), user_id=str(self.context["request"].user.id))
+        return project
+    
+    def get_srs_exports(self, obj):
+        srs_exports = SrsExport.objects.filter(project=obj)
+        return SrsExportSerializer(srs_exports, many=True).data
+
+    def get_user_stories(self, obj):
+        user_stories = UserStory.objects.filter(
+            requirement__project=obj,
+        ).exclude(
+            status=STATUS_ARCHIVED,
+        )
+        return UserStorySerializer(user_stories, many=True).data
+
+    def get_mockups(self, obj):
+        mockups = Mockup.objects.filter(
+            project=obj,
+        ).exclude(
+            status=STATUS_ARCHIVED
+        )
+        return MockupSerializer(mockups, many=True).data
+
+    def get_generation_progress(self, obj):
+        progress = {
+            "requirements": {
+                "status": obj.generation_status,
+                "started_at": obj.generation_started_at,
+                "completed_at": obj.generation_completed_at,
+                "error": obj.generation_error
+            },
+            "user_stories": {
+                "total": UserStory.objects.filter(requirement__project=obj).count(),
+                "completed": UserStory.objects.filter(
+                    requirement__project=obj,
+                    generation_status=STATUS_ARCHIVED
+                ).count()
+            },
+            "development_plan": {
+                "has_plan": DevelopmentPlan.objects.filter(project=obj).exists(),
+                "latest_version": DevelopmentPlan.objects.filter(project=obj).values_list('current_version_number',
+                                                                                          flat=True).first()
+            },
+            "uml_diagrams": {
+                "total": UmlDiagram.objects.filter(project=obj).count(),
+                "completed": UmlDiagram.objects.filter(
+                    project=obj,
+                    generation_status=STATUS_ARCHIVED
+                ).count()
+            }
+        }
+        return progress
