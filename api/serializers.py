@@ -140,45 +140,39 @@ class RequirementCommentSerializer(serializers.ModelSerializer):
 
 
 class MockupSerializer(serializers.ModelSerializer):
-    requirement = serializers.SerializerMethodField()
-    user_story = serializers.SerializerMethodField()
-    created_by = UserSerializer(read_only=True)
-    history = MockupHistorySerializer(many=True, read_only=True)
+    requirement_name = serializers.SerializerMethodField()
+    user_story_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Mockup
-        fields = "__all__"
-        read_only_fields = ("id", "created_at", "updated_at", "created_by",
-                            "generation_status", "generation_started_at",
-                            "generation_completed_at", "generation_error",
-                            "history")
+        fields = [
+            'id', 'project', 'requirement', 'user_story', 'name',
+            'html_content', 'created_by', 'version_number',
+            'generation_status', 'generation_started_at',
+            'generation_completed_at', 'generation_error',
+            'needs_regeneration', 'last_associated_change',
+            'status', 'created_at', 'updated_at',
+            'requirement_name', 'user_story_name',
+        ]
+        read_only_fields = [
+            'id', 'created_by', 'version_number',
+            'generation_status', 'generation_started_at',
+            'generation_completed_at', 'generation_error',
+            'needs_regeneration', 'last_associated_change',
+            'created_at', 'updated_at',
+            'requirement_name', 'user_story_name',
+        ]
 
-    def get_requirement(self, obj):
-        return obj.requirement.title if obj.requirement else None
-
-    def get_user_story(self, obj):
-        if obj.user_story:
-            return f"As a {obj.user_story.role}, I want to {obj.user_story.action}"
+    def get_requirement_name(self, obj):
+        if obj.requirement:
+            return obj.requirement.title
         return None
 
-    def update(self, instance, validated_data):
-        user = self.context["request"].user
-        MockupHistory.objects.create(
-            mockup=instance,
-            html_content=instance.html_content,
-            version_number=instance.version_number,
-            changed_by=user,
-            status=instance.status
-        )
+    def get_user_story_name(self, obj):
+        if obj.user_story:
+            return str(obj.user_story)
+        return None
 
-        instance.name = validated_data.get("name", instance.name)
-        instance.html_content = validated_data.get("html_content", instance.html_content)
-        instance.requirement = validated_data.get("requirement", instance.requirement)
-        instance.user_story = validated_data.get("user_story", instance.user_story)
-        instance.status = validated_data.get("status", instance.status)
-        instance.version_number += 1
-        instance.save()
-        return instance
 
 class SrsExportSerializer(serializers.ModelSerializer):
     created_by = UserSerializer(read_only=True)
@@ -366,7 +360,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         from .tasks import generate_requirements_task
         generate_requirements_task.delay(str(project.id), user_id=str(self.context["request"].user.id))
         return project
-    
+
     def get_srs_exports(self, obj):
         srs_exports = SrsExport.objects.filter(project=obj)
         return SrsExportSerializer(srs_exports, many=True).data

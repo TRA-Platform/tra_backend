@@ -9,7 +9,7 @@ from .models import (
     SrsTemplate, Project, Requirement, RequirementComment,
     DevelopmentPlan, DevelopmentPlanVersion, Mockup, MockupHistory,
     UserStory, UserStoryComment, UserStoryHistory, UmlDiagram, UML_DIAGRAM_TYPE_CHOICES, SRS_FORMAT_PDF,
-    SRS_FORMAT_MARKDOWN
+    SRS_FORMAT_MARKDOWN, RequirementHistory, GENERATION_STATUS_PENDING, STATUS_ACTIVE
 )
 from .serializers import (
     SrsTemplateSerializer, ProjectSerializer, RequirementSerializer, RequirementCommentSerializer,
@@ -19,7 +19,7 @@ from .serializers import (
 )
 from .tasks import (
     generate_requirements_task, export_srs_task, generate_development_plan_task,
-    generate_mockups_task, generate_user_stories_task, generate_uml_diagrams_task, logger
+    generate_mockups_task, generate_user_stories_task, generate_uml_diagrams_task, logger,
 )
 
 
@@ -156,6 +156,38 @@ class RequirementViewSet(viewsets.ModelViewSet):
         if self.action in ['retrieve', 'update', 'partial_update']:
             return RequirementDetailSerializer
         return RequirementSerializer
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        RequirementHistory.objects.create(
+            requirement=instance,
+            title=instance.title,
+            description=instance.description,
+            category=instance.category,
+            requirement_type=instance.requirement_type,
+            version_number=instance.version_number,
+            changed_by=user,
+            status=instance.status
+        )
+
+        instance.version_number += 1
+        mockups = Mockup.objects.filter(requirement=instance)
+        for mockup in mockups:
+            mockup.needs_regeneration = True
+            mockup.last_associated_change = timezone.now()
+            mockup.save()
+            generate_mockups_task.delay(
+                str(mockup.project.id),
+                requirement_id=str(mockup.requirement.id),
+                mockup_id=str(mockup.id)
+            )
+
+        self.perform_update(serializer)
+        return Response(serializer.data)
 
     @action(detail=True, methods=["post"])
     def generate_user_stories(self, request, pk=None):
@@ -355,24 +387,40 @@ class MockupViewSet(viewsets.ModelViewSet):
 
         return queryset
 
-    @action(detail=True, methods=["post"])
+    @action(detail=True, methods=['post'])
     def regenerate(self, request, pk=None):
-        mockup = self.get_object()
         feedback = request.data.get("feedback", "")
+        mockup = self.get_object()
+        mockup.generation_status = GENERATION_STATUS_PENDING
+        mockup.generation_started_at = timezone.now()
+        mockup.generation_completed_at = None
+        mockup.generation_error = ''
+        mockup.needs_regeneration = False
+        mockup.save()
+        generate_mockups_task.delay(str(mockup.project_id), mockup_id=str(mockup.id), feedback=feedback)
 
-        if mockup.user_story:
-            generate_mockups_task.delay(
-                str(mockup.project.id),
-                user_story_id=str(mockup.user_story.id),
-                mockup_id=str(mockup.id),
-                feedback=feedback
-            )
-        else:
-            generate_mockups_task.delay(
-                str(mockup.project.id),
-                requirement_id=str(mockup.requirement.id) if mockup.requirement else None,
-                mockup_id=str(mockup.id),
-                feedback=feedback
-            )
+        return Response(self.get_serializer(mockup).data)
 
-        return Response({"status": "Mockup regeneration started"}, status=status.HTTP_202_ACCEPTED)
+    @action(detail=False, methods=['post'])
+    def regenerate_all(self, request):
+        project_id = request.data.get('project_id')
+        if not project_id:
+            return Response(
+                {'error': 'project_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        mockups = Mockup.objects.filter(
+            project_id=project_id,
+            status=STATUS_ACTIVE,
+            needs_regeneration=True
+        )
+        for mockup in mockups:
+            mockup.generation_status = GENERATION_STATUS_PENDING
+            mockup.generation_started_at = timezone.now()
+            mockup.generation_completed_at = None
+            mockup.generation_error = ''
+            mockup.needs_regeneration = False
+            mockup.save()
+            generate_mockups_task.delay(str(mockup.project_id), mockup_id=mockup.id)
+
+        return Response(self.get_serializer(mockups, many=True).data)
