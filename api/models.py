@@ -382,11 +382,11 @@ class Mockup(models.Model):
     generation_started_at = models.DateTimeField(null=True, blank=True)
     generation_completed_at = models.DateTimeField(null=True, blank=True)
     generation_error = models.TextField(blank=True)
-
+    needs_regeneration = models.BooleanField(default=False)
+    last_associated_change = models.DateTimeField(null=True, blank=True)
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE,
     )
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

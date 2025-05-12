@@ -1,8 +1,10 @@
 import json
 import logging
+
+import bs4
 from django.utils import timezone
 from django.contrib.auth.models import User
-from celery import current_app
+from celery import current_app, shared_task
 from django.core.exceptions import ObjectDoesNotExist
 from .models import (
     Project, Requirement, RequirementHistory, UserStory, UserStoryHistory,
@@ -1021,7 +1023,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
         project = Project.objects.get(id=project_id)
     except ObjectDoesNotExist:
         return {"error": "Project not found"}
-
+    diagram = None
     try:
         plan_version = None
         if plan_version_id:
@@ -1196,167 +1198,202 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
 
 
 @app.task
-def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, mockup_id=None, feedback=None):
-    logger.error(f"Generating mockups for project {project_id}")
+def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, mockup_id=None, feedback=""):
     try:
         project = Project.objects.get(id=project_id)
-    except ObjectDoesNotExist:
-        return {"error": "Project not found"}
-    if mockup_id:
-        try:
+
+        if mockup_id:
             mockup = Mockup.objects.get(id=mockup_id)
             mockup.generation_status = GENERATION_STATUS_IN_PROGRESS
             mockup.generation_started_at = timezone.now()
+            mockup.needs_regeneration = False
             mockup.save()
-            MockupHistory.objects.create(
-                mockup=mockup,
-                html_content=mockup.html_content,
-                version_number=mockup.version_number,
-                status=mockup.status
-            )
 
-            if mockup.user_story:
-                user_stories = [mockup.user_story]
-                requirements = []
-            elif mockup.requirement:
-                requirements = [mockup.requirement]
-                user_stories = []
-            else:
-                mockup.generation_status = GENERATION_STATUS_FAILED
-                mockup.generation_error = "Mockup has no associated user story or requirement"
-                mockup.generation_completed_at = timezone.now()
+            target_requirement = None
+            target_user_story = None
+
+            if requirement_id:
+                target_requirement = Requirement.objects.get(id=requirement_id)
+                mockup.requirement = target_requirement
+                mockup.user_story = None
                 mockup.save()
-                return {"error": "Mockup has no associated user story or requirement"}
-
-            regenerate_mockup = mockup
-        except ObjectDoesNotExist:
-            return {"error": "Mockup not found"}
-    else:
-        regenerate_mockup = None
-        if user_story_id:
-            try:
-                user_story = UserStory.objects.get(id=user_story_id)
-                user_stories = [user_story]
-                requirements = []
-            except ObjectDoesNotExist:
-                return {"error": "User story not found"}
-        elif requirement_id:
-            try:
-                requirement = Requirement.objects.get(id=requirement_id)
-                requirements = [requirement]
-                user_stories = []
-            except ObjectDoesNotExist:
-                return {"error": "Requirement not found"}
-        else:
-            user_stories = UserStory.objects.filter(
-                requirement__project_id=project_id,
-                status__in=[STATUS_ACTIVE, STATUS_DRAFT]
-            )
-            if not user_stories.exists():
-                requirements = project.requirements.filter(
-                    status__in=[STATUS_ACTIVE, STATUS_DRAFT],
-                    category__in=[REQUIREMENT_CATEGORY_UIUX, REQUIREMENT_CATEGORY_FUNCTIONAL]
-                )
+            elif user_story_id:
+                target_user_story = UserStory.objects.get(id=user_story_id)
+                mockup.user_story = target_user_story
+                mockup.requirement = target_user_story.requirement
+                mockup.save()
             else:
-                requirements = []
+                target_requirement = mockup.requirement
+                target_user_story = mockup.user_story
+            try:
+                client = GptClient()
+                prompt = _create_mockup_prompt(
+                    project=project,
+                    requirement=target_requirement,
+                    user_story=target_user_story,
+                    regenerate_mockup=mockup,
+                    feedback=feedback
+                )
 
-    created_mockups = []
-    for user_story in user_stories:
-        prompt = _create_mockup_prompt(
-            project=project,
-            user_story=user_story,
-            requirement=user_story.requirement,
-            regenerate_mockup=regenerate_mockup if regenerate_mockup and regenerate_mockup.user_story == user_story else None,
-            feedback=feedback
-        )
+                mockup_data = _generate_mockup_from_prompt(prompt)
 
-        mockup_data = _generate_mockup_from_prompt(prompt)
+                if "error" in mockup_data:
+                    if mockup:
+                        mockup.generation_status = GENERATION_STATUS_FAILED
+                        mockup.generation_error = mockup_data["error"]
+                        mockup.generation_completed_at = timezone.now()
+                        mockup.save()
+                    return mockup_data
 
-        if "error" in mockup_data:
-            if regenerate_mockup:
-                regenerate_mockup.generation_status = GENERATION_STATUS_FAILED
-                regenerate_mockup.generation_error = mockup_data["error"]
-                regenerate_mockup.generation_completed_at = timezone.now()
-                regenerate_mockup.save()
-            return mockup_data
+                html_content = mockup_data.get("html_content", "")
+                mockup.html_content = html_content
+                mockup.generation_status = GENERATION_STATUS_COMPLETED
+                mockup.generation_completed_at = timezone.now()
+                mockup.version_number += 1
+                mockup.save()
+                MockupHistory.objects.create(
+                    mockup=mockup,
+                    html_content=mockup.html_content,
+                    version_number=mockup.version_number - 1,
+                    changed_by=None,
+                    status=mockup.status
+                )
 
-        html_content = mockup_data.get("html_content", "")
-        mockup_name = mockup_data.get("name", f"Mockup for {user_story.role} - {user_story.action[:50]}")
-
-        if regenerate_mockup:
-            regenerate_mockup.html_content = html_content
-            regenerate_mockup.name = mockup_name
-            regenerate_mockup.version_number += 1
-            regenerate_mockup.generation_status = GENERATION_STATUS_COMPLETED
-            regenerate_mockup.generation_completed_at = timezone.now()
-            regenerate_mockup.save()
-            created_mockups.append(str(regenerate_mockup.id))
+            except Exception as e:
+                mockup.generation_status = GENERATION_STATUS_FAILED
+                mockup.generation_error = f"Error generating mockup: {str(e)}"
+                mockup.save()
+                logger.error(f"Error generating mockup: {str(e)}")
         else:
-            mockup = Mockup.objects.create(
-                project=project,
-                user_story=user_story,
-                requirement=user_story.requirement,
-                name=mockup_name,
-                html_content=html_content,
-                status=STATUS_ACTIVE,
-                generation_status=GENERATION_STATUS_COMPLETED,
-                generation_completed_at=timezone.now()
-            )
-            created_mockups.append(str(mockup.id))
-    for requirement in requirements:
-        prompt = _create_mockup_prompt(
-            project=project,
-            user_story=None,
-            requirement=requirement,
-            regenerate_mockup=regenerate_mockup if regenerate_mockup and regenerate_mockup.requirement == requirement else None,
-            feedback=feedback
-        )
+            regenerate_mockup = None
+            if user_story_id:
+                try:
+                    user_story = UserStory.objects.get(id=user_story_id)
+                    user_stories = [user_story]
+                    requirements = []
+                except ObjectDoesNotExist:
+                    return {"error": "User story not found"}
+            elif requirement_id:
+                try:
+                    requirement = Requirement.objects.get(id=requirement_id)
+                    requirements = [requirement]
+                    user_stories = []
+                except ObjectDoesNotExist:
+                    return {"error": "Requirement not found"}
+            else:
+                user_stories = UserStory.objects.filter(
+                    requirement__project_id=project_id,
+                    status__in=[STATUS_ACTIVE, STATUS_DRAFT]
+                )
+                if not user_stories.exists():
+                    requirements = project.requirements.filter(
+                        status__in=[STATUS_ACTIVE, STATUS_DRAFT],
+                        category__in=[REQUIREMENT_CATEGORY_UIUX, REQUIREMENT_CATEGORY_FUNCTIONAL]
+                    )
+                else:
+                    requirements = []
 
-        mockup_data = _generate_mockup_from_prompt(prompt)
+            created_mockups = []
+            for user_story in user_stories:
+                prompt = _create_mockup_prompt(
+                    project=project,
+                    user_story=user_story,
+                    requirement=user_story.requirement,
+                    regenerate_mockup=regenerate_mockup if regenerate_mockup and regenerate_mockup.user_story == user_story else None,
+                    feedback=feedback
+                )
 
-        if "error" in mockup_data:
-            if regenerate_mockup:
-                regenerate_mockup.generation_status = GENERATION_STATUS_FAILED
-                regenerate_mockup.generation_error = mockup_data["error"]
-                regenerate_mockup.generation_completed_at = timezone.now()
-                regenerate_mockup.save()
-            return mockup_data
+                mockup_data = _generate_mockup_from_prompt(prompt)
 
-        html_content = mockup_data.get("html_content", "")
-        mockup_name = mockup_data.get("name", f"Mockup for {requirement.title}")
+                if "error" in mockup_data:
+                    if regenerate_mockup:
+                        regenerate_mockup.generation_status = GENERATION_STATUS_FAILED
+                        regenerate_mockup.generation_error = mockup_data["error"]
+                        regenerate_mockup.generation_completed_at = timezone.now()
+                        regenerate_mockup.save()
+                    return mockup_data
 
-        if regenerate_mockup:
-            regenerate_mockup.html_content = html_content
-            regenerate_mockup.name = mockup_name
-            regenerate_mockup.version_number += 1
-            regenerate_mockup.generation_status = GENERATION_STATUS_COMPLETED
-            regenerate_mockup.generation_completed_at = timezone.now()
-            regenerate_mockup.save()
-            created_mockups.append(str(regenerate_mockup.id))
-        else:
-            previous_mockups = Mockup.objects.filter(
-                project=project,
-                requirement=requirement,
-                status=STATUS_ACTIVE,
-            ).update(
-                status=STATUS_ARCHIVED,
-            )
-            mockup = Mockup.objects.create(
-                project=project,
-                requirement=requirement,
-                name=mockup_name,
-                html_content=html_content,
-                status=STATUS_ACTIVE,
-                generation_status=GENERATION_STATUS_COMPLETED,
-                generation_completed_at=timezone.now()
-            )
-            created_mockups.append(str(mockup.id))
+                html_content = mockup_data.get("html_content", "")
+                mockup_name = mockup_data.get("name", f"Mockup for {user_story.role} - {user_story.action[:50]}")
 
-    return {
-        "success": True,
-        "generated_mockups": created_mockups,
-        "count": len(created_mockups)
-    }
+                if regenerate_mockup:
+                    regenerate_mockup.html_content = html_content
+                    regenerate_mockup.name = mockup_name
+                    regenerate_mockup.version_number += 1
+                    regenerate_mockup.generation_status = GENERATION_STATUS_COMPLETED
+                    regenerate_mockup.generation_completed_at = timezone.now()
+                    regenerate_mockup.save()
+                    created_mockups.append(str(regenerate_mockup.id))
+                else:
+                    mockup = Mockup.objects.create(
+                        project=project,
+                        user_story=user_story,
+                        requirement=user_story.requirement,
+                        name=mockup_name,
+                        html_content=html_content,
+                        status=STATUS_ACTIVE,
+                        generation_status=GENERATION_STATUS_COMPLETED,
+                        generation_completed_at=timezone.now()
+                    )
+                    created_mockups.append(str(mockup.id))
+
+            for requirement in requirements:
+                prompt = _create_mockup_prompt(
+                    project=project,
+                    user_story=None,
+                    requirement=requirement,
+                    regenerate_mockup=regenerate_mockup if regenerate_mockup and regenerate_mockup.requirement == requirement else None,
+                    feedback=feedback
+                )
+
+                mockup_data = _generate_mockup_from_prompt(prompt)
+
+                if "error" in mockup_data:
+                    if regenerate_mockup:
+                        regenerate_mockup.generation_status = GENERATION_STATUS_FAILED
+                        regenerate_mockup.generation_error = mockup_data["error"]
+                        regenerate_mockup.generation_completed_at = timezone.now()
+                        regenerate_mockup.save()
+                    return mockup_data
+
+                html_content = mockup_data.get("html_content", "")
+                mockup_name = mockup_data.get("name", f"Mockup for {requirement.title}")
+
+                if regenerate_mockup:
+                    regenerate_mockup.html_content = html_content
+                    regenerate_mockup.name = mockup_name
+                    regenerate_mockup.version_number += 1
+                    regenerate_mockup.generation_status = GENERATION_STATUS_COMPLETED
+                    regenerate_mockup.generation_completed_at = timezone.now()
+                    regenerate_mockup.save()
+                    created_mockups.append(str(regenerate_mockup.id))
+                else:
+                    previous_mockups = Mockup.objects.filter(
+                        project=project,
+                        requirement=requirement,
+                        status=STATUS_ACTIVE,
+                    ).update(
+                        status=STATUS_ARCHIVED,
+                    )
+                    mockup = Mockup.objects.create(
+                        project=project,
+                        requirement=requirement,
+                        name=mockup_name,
+                        html_content=html_content,
+                        status=STATUS_ACTIVE,
+                        generation_status=GENERATION_STATUS_COMPLETED,
+                        generation_completed_at=timezone.now()
+                    )
+                    created_mockups.append(str(mockup.id))
+
+            return {
+                "success": True,
+                "generated_mockups": created_mockups,
+                "count": len(created_mockups)
+            }
+    except Exception as e:
+        logger.error(f"Error in generate_mockups_task: {str(e)}")
+        raise
 
 
 def _create_mockup_prompt(project, user_story, requirement, regenerate_mockup=None, feedback=None):
@@ -1397,6 +1434,7 @@ def _create_mockup_prompt(project, user_story, requirement, regenerate_mockup=No
     if regenerate_mockup:
         prompt += (
             f"Current Mockup:\n"
+            f"Code: {regenerate_mockup.html_content}"
             f"Name: {regenerate_mockup.name}\n"
             f"User Feedback: {feedback or 'Please improve this mockup.'}\n\n"
         )
@@ -1440,21 +1478,28 @@ def _generate_mockup_from_prompt(prompt):
 
     if not html_content:
         return {"error": "No HTML content generated", "detail": parsed_data}
-    html_content = html_content.replace("<script", "<!-- script").replace("</script>", "<!-- /script -->")
-    html_content = f"""
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8"/>
-            <title>{name}</title>
-            <script src="https://cdn.tailwindcss.com/"></script>
-        </head>
-        <body class="bg-gray-100 text-gray-800">
-        {html_content}
-        </body>
-        </html>
-    """
+    html_parsed = bs4.BeautifulSoup(html_content, "html.parser")
 
+    for script in html_parsed.find_all("script"):
+        script.decompose()
+    for comment in html_parsed.find_all(string=lambda text: isinstance(text, bs4.Comment)):
+        comment.extract()
+    head = html_parsed.find("head")
+    if not head:
+        head = html_parsed.new_tag("head")
+        html_parsed.insert(0, head)
+    tailwind_script = html_parsed.new_tag("script")
+    tailwind_script.attrs["src"] = "https://cdn.tailwindcss.com/"
+    head.append(tailwind_script)
+    script_to_disable_hrefs = """
+        document.querySelectorAll('a').forEach(function(a) {
+            a.href = '#';
+        });"""
+
+    script_tag = html_parsed.new_tag("script")
+    script_tag.string = script_to_disable_hrefs
+    html_parsed.body.append(script_tag)
+    html_content = str(html_parsed)
     return {
         "name": name,
         "html_content": html_content
