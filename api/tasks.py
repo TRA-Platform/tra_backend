@@ -24,6 +24,7 @@ from .srs_translations import get_translations
 from django.conf import settings
 from .s3_utils import upload_to_s3, generate_export_filename
 from .doc_utils import convert_md_to_html, convert_md_to_pdf
+from .image_utils import html_to_base64_png, resize_base64_image
 
 app = current_app._get_current_object()
 logger = logging.getLogger(__name__)
@@ -103,6 +104,7 @@ def generate_requirements_task(project_id, user_id=None):
             project.generation_status = GENERATION_STATUS_FAILED
             project.generation_error = f"Failed to generate requirements: {resp}"
             project.save()
+            project.update_generation_progress()
             return {"error": f"Failed to generate requirements: {resp}"}
 
         requirements = resp.get("requirements", [])
@@ -110,6 +112,7 @@ def generate_requirements_task(project_id, user_id=None):
             project.generation_status = GENERATION_STATUS_FAILED
             project.generation_error = "No requirements generated"
             project.save()
+            project.update_generation_progress()
             return {"error": "No requirements generated"}
 
         current_requirements = Requirement.objects.filter(project=project)
@@ -178,6 +181,7 @@ def generate_requirements_task(project_id, user_id=None):
         project.generation_status = GENERATION_STATUS_COMPLETED
         project.generation_completed_at = timezone.now()
         project.save()
+        project.update_generation_progress()
         generate_user_stories_task.delay(str(project.id), user_id=str(user.id) if user else None)
 
         return {"success": True, "requirements_count": len(new_requirements)}
@@ -186,6 +190,7 @@ def generate_requirements_task(project_id, user_id=None):
         project.generation_status = GENERATION_STATUS_FAILED
         project.generation_error = f"Error generating requirements: {str(e)}"
         project.save()
+        project.update_generation_progress()
         return {"error": f"Error generating requirements: {str(e)}"}
 
 
@@ -329,6 +334,7 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
                     regenerate_story.generation_completed_at = timezone.now()
                     regenerate_story.save()
                     created_stories.append(str(regenerate_story.id))
+                    generate_mockups_task.delay(str(project.id), user_story_id=str(regenerate_story.id))
                 else:
                     new_story = UserStory.objects.create(
                         requirement=requirement,
@@ -341,9 +347,10 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
                         generation_completed_at=timezone.now()
                     )
                     created_stories.append(str(new_story.id))
-                    generate_mockups_task.delay(str(project.id), requirement_id=str(requirement.id))
+                    generate_mockups_task.delay(str(project.id), user_story_id=str(new_story.id))
         if not requirement_id and not user_story_id:
             generate_development_plan_task.delay(str(project.id), user_id=str(user.id) if user else None)
+        project.update_generation_progress()
         return {"success": True, "created_user_stories": created_stories, "count": len(created_stories)}
     except Exception as e:
         logger.error(f"Error generating user stories: {str(e)}")
@@ -351,6 +358,7 @@ def generate_user_stories_task(project_id, requirement_id=None, user_story_id=No
             regenerate_story.generation_status = GENERATION_STATUS_FAILED
             regenerate_story.generation_error = f"Error generating user story: {str(e)}"
             regenerate_story.save()
+        project.update_generation_progress()
         return {"error": f"Error generating user stories: {str(e)}"}
 
 
@@ -756,8 +764,18 @@ def format_requirement_hierarchy(requirement, all_reqs, index, prefix, translati
 
     mockups = Mockup.objects.filter(requirement=requirement, status=STATUS_ACTIVE)
     if mockups.exists():
-        result.append(f"**{translations['mockups']}**: {translations['available_in_repo']}\n\n")
-
+        result.append(f"**{translations['mockups']}**:\n\n")
+        for i, mockup in enumerate(mockups, 1):
+            try:
+                if mockup.html_content:
+                    base64_img = html_to_base64_png(mockup.html_content)
+                    resized_base64 = resize_base64_image(base64_img, max_width=800)
+                    result.append(f"**{mockup.name or f'Mockup {i}'}**:\n\n")
+                    result.append(f"![{mockup.name or f'Mockup {i}'}](data:image/png;base64,{resized_base64})\n\n")
+            except Exception as e:
+                logger.error(f"Error rendering mockup {mockup.id} to PNG: {str(e)}")
+                result.append(f"*Error rendering mockup: {mockup.name or f'Mockup {i}'}*\n\n")
+    
     comments = RequirementComment.objects.filter(requirement=requirement, status=STATUS_ACTIVE)
     if comments.exists():
         result.append(f"**{translations['notes']}**:\n\n")
@@ -999,6 +1017,7 @@ def generate_development_plan_task(project_id, user_id=None):
         if plan.status == STATUS_ARCHIVED:
             plan.status = STATUS_DRAFT
         plan.save()
+        project.update_generation_progress()
         for diagram_type in [UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_SEQUENCE, UML_DIAGRAM_TYPE_ACTIVITY,
                              UML_DIAGRAM_TYPE_COMPONENT]:
             generate_uml_diagrams_task.delay(str(project.id), diagram_type=diagram_type, plan_version_id=str(dv.id))
@@ -1013,6 +1032,7 @@ def generate_development_plan_task(project_id, user_id=None):
         }
     except Exception as e:
         logger.error(f"Error generating development plan: {str(e)}")
+        project.update_generation_progress()
         return {"error": f"Error generating development plan: {str(e)}"}
 
 
@@ -1165,6 +1185,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             diagram.generation_error = "Invalid or empty response"
             diagram.generation_completed_at = timezone.now()
             diagram.save()
+            project.update_generation_progress()
             return {"error": "Invalid UML diagram content", "detail": data}
         plantuml_code = data
         if plantuml_code.startswith("```plantuml"):
@@ -1181,6 +1202,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
         diagram.generation_status = GENERATION_STATUS_COMPLETED
         diagram.generation_completed_at = timezone.now()
         diagram.save()
+        project.update_generation_progress()
 
         return {
             "success": True,
@@ -1194,6 +1216,7 @@ def generate_uml_diagrams_task(project_id, diagram_type="class", diagram_id=None
             diagram.generation_error = f"Error generating UML diagram: {str(e)}"
             diagram.generation_completed_at = timezone.now()
             diagram.save()
+        project.update_generation_progress()
         return {"error": f"Error generating UML diagram: {str(e)}"}
 
 
@@ -1243,6 +1266,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                         mockup.generation_error = mockup_data["error"]
                         mockup.generation_completed_at = timezone.now()
                         mockup.save()
+                    project.update_generation_progress()
                     return mockup_data
 
                 html_content = mockup_data.get("html_content", "")
@@ -1264,6 +1288,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                 mockup.generation_error = f"Error generating mockup: {str(e)}"
                 mockup.save()
                 logger.error(f"Error generating mockup: {str(e)}")
+            project.update_generation_progress()
         else:
             regenerate_mockup = None
             if user_story_id:
@@ -1311,6 +1336,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                         regenerate_mockup.generation_error = mockup_data["error"]
                         regenerate_mockup.generation_completed_at = timezone.now()
                         regenerate_mockup.save()
+                    project.update_generation_progress()
                     return mockup_data
 
                 html_content = mockup_data.get("html_content", "")
@@ -1323,6 +1349,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                     regenerate_mockup.generation_status = GENERATION_STATUS_COMPLETED
                     regenerate_mockup.generation_completed_at = timezone.now()
                     regenerate_mockup.save()
+                    project.update_generation_progress()
                     created_mockups.append(str(regenerate_mockup.id))
                 else:
                     mockup = Mockup.objects.create(
@@ -1335,6 +1362,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                         generation_status=GENERATION_STATUS_COMPLETED,
                         generation_completed_at=timezone.now()
                     )
+                    project.update_generation_progress()
                     created_mockups.append(str(mockup.id))
 
             for requirement in requirements:
@@ -1354,6 +1382,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                         regenerate_mockup.generation_error = mockup_data["error"]
                         regenerate_mockup.generation_completed_at = timezone.now()
                         regenerate_mockup.save()
+                    project.update_generation_progress()
                     return mockup_data
 
                 html_content = mockup_data.get("html_content", "")
@@ -1366,6 +1395,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                     regenerate_mockup.generation_status = GENERATION_STATUS_COMPLETED
                     regenerate_mockup.generation_completed_at = timezone.now()
                     regenerate_mockup.save()
+                    project.update_generation_progress()
                     created_mockups.append(str(regenerate_mockup.id))
                 else:
                     previous_mockups = Mockup.objects.filter(
@@ -1384,6 +1414,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                         generation_status=GENERATION_STATUS_COMPLETED,
                         generation_completed_at=timezone.now()
                     )
+                    project.update_generation_progress()
                     created_mockups.append(str(mockup.id))
 
             return {
@@ -1393,6 +1424,7 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
             }
     except Exception as e:
         logger.error(f"Error in generate_mockups_task: {str(e)}")
+        project.update_generation_progress()
         raise
 
 
@@ -1494,7 +1526,13 @@ def _generate_mockup_from_prompt(prompt):
     script_to_disable_hrefs = """
         document.querySelectorAll('a').forEach(function(a) {
             a.href = '#';
-        });"""
+        });
+        document.querySelectorAll('button').forEach(function(button) {
+            button.addEventListener('click', function(e) {
+                e.preventDefault();
+            });
+        });
+        """
 
     script_tag = html_parsed.new_tag("script")
     script_tag.string = script_to_disable_hrefs

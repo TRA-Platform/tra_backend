@@ -170,11 +170,32 @@ class Project(models.Model):
         max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT,
     )
 
+    # Add project-level generation progress fields
+    requirements_total = models.IntegerField(default=0)
+    requirements_completed = models.IntegerField(default=0)
+    user_stories_total = models.IntegerField(default=0)
+    user_stories_completed = models.IntegerField(default=0)
+    mockups_total = models.IntegerField(default=0)
+    mockups_completed = models.IntegerField(default=0)
+    uml_diagrams_total = models.IntegerField(default=0)
+    uml_diagrams_completed = models.IntegerField(default=0)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return self.name
+
+    def update_generation_progress(self):
+        self.requirements_total = self.requirements.count()
+        self.requirements_completed = self.requirements.filter(status='completed').count()
+        self.user_stories_total = self.user_stories.count() if hasattr(self, 'user_stories') else 0
+        self.user_stories_completed = self.user_stories.filter(generation_status='completed').count() if hasattr(self, 'user_stories') else 0
+        self.mockups_total = self.mockups.count() if hasattr(self, 'mockups') else 0
+        self.mockups_completed = self.mockups.filter(generation_status='completed', needs_regeneration=False).count() if hasattr(self, 'mockups') else 0
+        self.uml_diagrams_total = self.uml_diagrams.count() if hasattr(self, 'uml_diagrams') else 0
+        self.uml_diagrams_completed = self.uml_diagrams.filter(generation_status='completed').count() if hasattr(self, 'uml_diagrams') else 0
+        self.save()
 
 
 class Requirement(models.Model):
