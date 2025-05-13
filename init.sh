@@ -1,3 +1,6 @@
+echo ====INSTALLING DEPENDENCIES [START]====
+playwright install
+echo ====INSTALLING DEPENDENCIES [END]====
 echo ====MIGRATING [START]====
 python manage.py migrate
 echo ====MIGRATING [END]====

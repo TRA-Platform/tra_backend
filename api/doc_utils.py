@@ -1,8 +1,11 @@
 import markdown
-import pdfkit
 import tempfile
+import subprocess
 import os
+import logging
 from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 def convert_md_to_html(md_content):
     html = markdown.markdown(
@@ -37,29 +40,41 @@ def convert_md_to_pdf(md_content):
     with tempfile.NamedTemporaryFile(suffix='.html', delete=False) as temp_html:
         temp_html.write(html_content.encode('utf-8'))
         temp_html_path = temp_html.name
-
-    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_pdf:
-        temp_pdf_path = temp_pdf.name
-
+    
+    output_pdf = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False).name
+    
     try:
-        pdfkit.from_file(
+        cmd = [
+            'wkhtmltopdf',
+            '--enable-javascript',
+            '--javascript-delay', '1000',
+            '--image-quality', '90',
+            '--margin-top', '20',
+            '--margin-right', '20',
+            '--margin-bottom', '20',
+            '--margin-left', '20',
             temp_html_path,
-            temp_pdf_path,
-            options={
-                'page-size': 'A4',
-                'margin-top': '20mm',
-                'margin-right': '20mm',
-                'margin-bottom': '20mm',
-                'margin-left': '20mm',
-                'encoding': 'UTF-8',
-                'no-outline': None
-            }
-        )
+            output_pdf
+        ]
         
-        with open(temp_pdf_path, 'rb') as pdf_file:
-            pdf_content = pdf_file.read()
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        
+        if process.returncode != 0:
+            logger.error(f"wkhtmltopdf error: {stderr.decode('utf-8')}")
+            raise Exception(f"wkhtmltopdf failed with error code {process.returncode}")
+        
+        with open(output_pdf, 'rb') as f:
+            pdf_data = f.read()
             
-        return pdf_content
+        return pdf_data
+    
+    except Exception as e:
+        logger.error(f"Error converting to PDF: {str(e)}")
+        raise
+    
     finally:
-        os.unlink(temp_html_path)
-        os.unlink(temp_pdf_path) 
+        if os.path.exists(temp_html_path):
+            os.unlink(temp_html_path)
+        if os.path.exists(output_pdf):
+            os.unlink(output_pdf) 

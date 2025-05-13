@@ -70,6 +70,7 @@ class UserStorySerializer(serializers.ModelSerializer):
     history = UserStoryHistorySerializer(many=True, read_only=True)
     comments = UserStoryCommentSerializer(many=True, read_only=True)
     requirement = serializers.SerializerMethodField()
+    mockups = serializers.SerializerMethodField()
 
     class Meta:
         model = UserStory
@@ -77,12 +78,12 @@ class UserStorySerializer(serializers.ModelSerializer):
             "id", "requirement", "role", "action", "benefit",
             "acceptance_criteria", "version_number", "generation_status",
             "generation_started_at", "generation_completed_at", "generation_error",
-            "status", "created_at", "updated_at", "history", "comments"
+            "status", "created_at", "updated_at", "history", "comments", "mockups"
         )
         read_only_fields = ("id", "version_number", "created_at", "updated_at",
                             "history", "comments", "generation_status",
                             "generation_started_at", "generation_completed_at",
-                            "generation_error")
+                            "generation_error", "mockups")
 
     def update(self, instance, validated_data):
         user = self.context["request"].user
@@ -107,6 +108,12 @@ class UserStorySerializer(serializers.ModelSerializer):
 
     def get_requirement(self, obj):
         return obj.requirement.title
+
+    def get_mockups(self, obj):
+        mockups = Mockup.objects.filter(
+            user_story=obj,
+        ).exclude(status=STATUS_ARCHIVED)
+        return MockupSerializer(mockups, many=True).data
 
 
 class MockupHistorySerializer(serializers.ModelSerializer):
@@ -318,7 +325,11 @@ class ProjectListSerializer(serializers.ModelSerializer):
             "id", "created_by", "name", "short_description",
             "type_of_application", "operating_systems", "language", "status",
             "generation_status", "deadline_start", "deadline_end",
-            "created_at", "updated_at"
+            "created_at", "updated_at",
+            "requirements_total", "requirements_completed",
+            "user_stories_total", "user_stories_completed",
+            "mockups_total", "mockups_completed",
+            "uml_diagrams_total", "uml_diagrams_completed",
         )
         read_only_fields = ("id", "created_by", "created_at", "updated_at")
 
@@ -332,6 +343,14 @@ class ProjectSerializer(serializers.ModelSerializer):
     user_stories = serializers.SerializerMethodField()
     generation_progress = serializers.SerializerMethodField()
     srs_exports = serializers.SerializerMethodField()
+    requirements_total = serializers.IntegerField(read_only=True)
+    requirements_completed = serializers.IntegerField(read_only=True)
+    user_stories_total = serializers.IntegerField(read_only=True)
+    user_stories_completed = serializers.IntegerField(read_only=True)
+    mockups_total = serializers.IntegerField(read_only=True)
+    mockups_completed = serializers.IntegerField(read_only=True)
+    uml_diagrams_total = serializers.IntegerField(read_only=True)
+    uml_diagrams_completed = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Project
@@ -345,7 +364,11 @@ class ProjectSerializer(serializers.ModelSerializer):
             "generation_completed_at", "generation_error", "status",
             "created_at", "updated_at", "requirements", "mockups",
             "development_plan", "uml_diagrams", "user_stories", "generation_progress",
-            "srs_exports"
+            "srs_exports",
+            "requirements_total", "requirements_completed",
+            "user_stories_total", "user_stories_completed",
+            "mockups_total", "mockups_completed",
+            "uml_diagrams_total", "uml_diagrams_completed",
         )
         read_only_fields = (
             "id", "created_by", "created_at", "updated_at", "requirements",
@@ -382,31 +405,25 @@ class ProjectSerializer(serializers.ModelSerializer):
         return MockupSerializer(mockups, many=True).data
 
     def get_generation_progress(self, obj):
-        progress = {
+        return {
             "requirements": {
+                "total": obj.requirements_total,
+                "completed": obj.requirements_completed,
                 "status": obj.generation_status,
                 "started_at": obj.generation_started_at,
                 "completed_at": obj.generation_completed_at,
                 "error": obj.generation_error
             },
             "user_stories": {
-                "total": UserStory.objects.filter(requirement__project=obj).count(),
-                "completed": UserStory.objects.filter(
-                    requirement__project=obj,
-                    generation_status=STATUS_ARCHIVED
-                ).count()
+                "total": obj.user_stories_total,
+                "completed": obj.user_stories_completed
             },
-            "development_plan": {
-                "has_plan": DevelopmentPlan.objects.filter(project=obj).exists(),
-                "latest_version": DevelopmentPlan.objects.filter(project=obj).values_list('current_version_number',
-                                                                                          flat=True).first()
+            "mockups": {
+                "total": obj.mockups_total,
+                "completed": obj.mockups_completed
             },
             "uml_diagrams": {
-                "total": UmlDiagram.objects.filter(project=obj).count(),
-                "completed": UmlDiagram.objects.filter(
-                    project=obj,
-                    generation_status=STATUS_ARCHIVED
-                ).count()
+                "total": obj.uml_diagrams_total,
+                "completed": obj.uml_diagrams_completed
             }
         }
-        return progress
