@@ -7,6 +7,7 @@ import asyncio
 from PIL import Image, ImageDraw, ImageFont
 import logging
 from playwright.async_api import async_playwright
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -128,17 +129,11 @@ async def _render_html_to_png_async(html_content, width=1200, height=800):
             browser = await p.chromium.launch()
             context = await browser.new_context(
                 viewport={'width': width, 'height': height},
-                device_scale_factor=2  # For better quality
+                device_scale_factor=2
             )
             page = await context.new_page()
-            
-            # Load the HTML content
             await page.set_content(processed_html)
-            
-            # Wait for any dynamic content to load
             await page.wait_for_load_state('networkidle')
-            
-            # Take screenshot
             screenshot = await page.screenshot(
                 type='png',
                 full_page=True,
@@ -180,4 +175,13 @@ def resize_base64_image(base64_string, max_width=800):
     
     buffer = io.BytesIO()
     img.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode('utf-8') 
+    return base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+def s3_image_url_to_base64(image_url):
+    try:
+        resp = requests.get(image_url)
+        resp.raise_for_status()
+        return base64.b64encode(resp.content).decode('utf-8')
+    except Exception as e:
+        logger.error(f"Failed to fetch image from S3: {e}")
+        return None 

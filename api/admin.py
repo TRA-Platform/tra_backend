@@ -12,7 +12,8 @@ from .models import (
 )
 from .tasks import (
     generate_requirements_task, export_srs_task, generate_development_plan_task,
-    generate_mockups_task, generate_user_stories_task, generate_uml_diagrams_task
+    generate_mockups_task, generate_user_stories_task, generate_uml_diagrams_task,
+    generate_mockup_images_task
 )
 
 
@@ -145,6 +146,17 @@ def admin_generate_uml_diagrams(modeladmin, request, queryset):
         modeladmin.message_user(
             request,
             f"Started UML diagram generation for project '{project.name}'",
+            messages.SUCCESS
+        )
+
+
+@admin.action(description="Generate Images for Mockups")
+def admin_generate_images(modeladmin, request, queryset):
+    for project in queryset:
+        generate_mockup_images_task.delay(project_id=str(project.id))
+        modeladmin.message_user(
+            request,
+            f"Started image generation for project '{project.name}'",
             messages.SUCCESS
         )
 
@@ -667,14 +679,17 @@ class UmlDiagramAdmin(admin.ModelAdmin):
 class MockupAdmin(admin.ModelAdmin):
     list_display = (
         'name', 'project_link', 'requirement_link',
-        'version_number', 'generation_status', 'status', 'created_at'
+        'version_number', 'generation_status', 'status', 'created_at',
+        'image_preview'
     )
     list_filter = ('status', 'generation_status', 'created_at', 'version_number')
     search_fields = ('name', 'html_content', 'project__name')
     readonly_fields = (
         'created_at', 'updated_at', 'version_number',
-        'generation_started_at', 'generation_completed_at'
+        'generation_started_at', 'generation_completed_at',
+        'image_preview'
     )
+    actions = ['generate_images']
 
     inlines = [MockupHistoryInline]
 
@@ -686,7 +701,7 @@ class MockupAdmin(admin.ModelAdmin):
             )
         }),
         ('Content', {
-            'fields': ('html_content',),
+            'fields': ('html_content', 'image_preview'),
             'classes': ('collapse',),
         }),
         ('Generation Status', {
@@ -715,6 +730,23 @@ class MockupAdmin(admin.ModelAdmin):
         return "—"
 
     requirement_link.short_description = 'Requirement'
+
+    def image_preview(self, obj):
+        if obj.image and not obj.image.startswith("https://placehold.co"):
+            return format_html('<img src="{}" style="max-width: 200px; max-height: 200px;" />', obj.image)
+        return "No image available"
+
+    image_preview.short_description = 'Image Preview'
+
+    def generate_images(self, request, queryset):
+        for mockup in queryset:
+            generate_mockup_images_task.delay(mockup_id=str(mockup.id))
+        self.message_user(
+            request,
+            f"Started image generation for {queryset.count()} mockups",
+            messages.SUCCESS
+        )
+    generate_images.short_description = "Generate images for selected mockups"
 
     def get_queryset(self, request):
         return super().get_queryset(request).select_related(

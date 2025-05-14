@@ -154,7 +154,40 @@ class MockupSerializer(serializers.ModelSerializer):
         model = Mockup
         fields = [
             'id', 'project', 'requirement', 'user_story', 'name',
-            'html_content', 'created_by', 'version_number',
+            'html_content', 'image', 'created_by', 'version_number',
+            'generation_status', 'generation_started_at',
+            'generation_completed_at', 'generation_error',
+            'needs_regeneration', 'last_associated_change',
+            'status', 'created_at', 'updated_at',
+            'requirement_name', 'user_story_name',
+        ]
+        read_only_fields = [
+            'id', 'created_by', 'version_number',
+            'generation_status', 'generation_started_at',
+            'generation_completed_at', 'generation_error', 'last_associated_change',
+            'created_at', 'updated_at',
+            'requirement_name', 'user_story_name',
+            'image',
+        ]
+
+    def get_requirement_name(self, obj):
+        if obj.requirement:
+            return obj.requirement.title
+        return None
+
+    def get_user_story_name(self, obj):
+        if obj.user_story:
+            return str(obj.user_story)
+        return None
+
+class MockupSerializerShort(serializers.ModelSerializer):
+    requirement_name = serializers.SerializerMethodField()
+    user_story_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Mockup
+        fields = [
+            'id', 'project', 'requirement', 'user_story', 'name', 'image', 'created_by', 'version_number',
             'generation_status', 'generation_started_at',
             'generation_completed_at', 'generation_error',
             'needs_regeneration', 'last_associated_change',
@@ -168,6 +201,7 @@ class MockupSerializer(serializers.ModelSerializer):
             'needs_regeneration', 'last_associated_change',
             'created_at', 'updated_at',
             'requirement_name', 'user_story_name',
+            'image',
         ]
 
     def get_requirement_name(self, obj):
@@ -402,7 +436,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         ).exclude(
             status=STATUS_ARCHIVED
         )
-        return MockupSerializer(mockups, many=True).data
+        return MockupSerializerShort(mockups, many=True).data
 
     def get_generation_progress(self, obj):
         return {

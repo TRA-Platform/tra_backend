@@ -24,7 +24,7 @@ from .srs_translations import get_translations
 from django.conf import settings
 from .s3_utils import upload_to_s3, generate_export_filename
 from .doc_utils import convert_md_to_html, convert_md_to_pdf
-from .image_utils import html_to_base64_png, resize_base64_image
+from .image_utils import html_to_base64_png, resize_base64_image, s3_image_url_to_base64, render_html_to_png
 
 app = current_app._get_current_object()
 logger = logging.getLogger(__name__)
@@ -767,8 +767,12 @@ def format_requirement_hierarchy(requirement, all_reqs, index, prefix, translati
         result.append(f"**{translations['mockups']}**:\n\n")
         for i, mockup in enumerate(mockups, 1):
             try:
-                if mockup.html_content:
+                base64_img = None
+                if mockup.image and not mockup.image.startswith("https://placehold.co"):
+                    base64_img = s3_image_url_to_base64(mockup.image)
+                if not base64_img and mockup.html_content:
                     base64_img = html_to_base64_png(mockup.html_content)
+                if base64_img:
                     resized_base64 = resize_base64_image(base64_img, max_width=800)
                     result.append(f"**{mockup.name or f'Mockup {i}'}**:\n\n")
                     result.append(f"![{mockup.name or f'Mockup {i}'}](data:image/png;base64,{resized_base64})\n\n")
@@ -1271,9 +1275,11 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
 
                 html_content = mockup_data.get("html_content", "")
                 mockup.html_content = html_content
+                mockup.needs_regeneration = False
                 mockup.generation_status = GENERATION_STATUS_COMPLETED
                 mockup.generation_completed_at = timezone.now()
                 mockup.version_number += 1
+                mockup.image = ""
                 mockup.save()
                 MockupHistory.objects.create(
                     mockup=mockup,
@@ -1345,9 +1351,11 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                 if regenerate_mockup:
                     regenerate_mockup.html_content = html_content
                     regenerate_mockup.name = mockup_name
+                    regenerate_mockup.needs_regeneration = False
                     regenerate_mockup.version_number += 1
                     regenerate_mockup.generation_status = GENERATION_STATUS_COMPLETED
                     regenerate_mockup.generation_completed_at = timezone.now()
+                    regenerate_mockup.image = ""
                     regenerate_mockup.save()
                     project.update_generation_progress()
                     created_mockups.append(str(regenerate_mockup.id))
@@ -1360,7 +1368,8 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                         html_content=html_content,
                         status=STATUS_ACTIVE,
                         generation_status=GENERATION_STATUS_COMPLETED,
-                        generation_completed_at=timezone.now()
+                        generation_completed_at=timezone.now(),
+                        image=""
                     )
                     project.update_generation_progress()
                     created_mockups.append(str(mockup.id))
@@ -1390,10 +1399,12 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
 
                 if regenerate_mockup:
                     regenerate_mockup.html_content = html_content
+                    regenerate_mockup.needs_regeneration = False
                     regenerate_mockup.name = mockup_name
                     regenerate_mockup.version_number += 1
                     regenerate_mockup.generation_status = GENERATION_STATUS_COMPLETED
                     regenerate_mockup.generation_completed_at = timezone.now()
+                    regenerate_mockup.image = ""
                     regenerate_mockup.save()
                     project.update_generation_progress()
                     created_mockups.append(str(regenerate_mockup.id))
@@ -1412,7 +1423,8 @@ def generate_mockups_task(project_id, user_story_id=None, requirement_id=None, m
                         html_content=html_content,
                         status=STATUS_ACTIVE,
                         generation_status=GENERATION_STATUS_COMPLETED,
-                        generation_completed_at=timezone.now()
+                        generation_completed_at=timezone.now(),
+                        image=""
                     )
                     project.update_generation_progress()
                     created_mockups.append(str(mockup.id))
@@ -1542,3 +1554,43 @@ def _generate_mockup_from_prompt(prompt):
         "name": name,
         "html_content": html_content
     }
+
+
+@app.task
+def generate_mockup_images_task(mockup_id=None, project_id=None):
+    logger.info(f"Generating images for mockups")
+    try:
+        if mockup_id:
+            mockups = Mockup.objects.filter(id=mockup_id)
+        elif project_id:
+            mockups = Mockup.objects.filter(
+                project_id=project_id,
+                status=STATUS_ACTIVE,
+                generation_status=GENERATION_STATUS_COMPLETED
+            )
+        else:
+            return {"error": "Either mockup_id or project_id must be provided"}
+
+        for mockup in mockups:
+            if not mockup.html_content:
+                continue
+            if mockup.image and not mockup.image.startswith("https://placehold.co") and mockup.image != "":
+                continue
+            try:
+                png_data = render_html_to_png(mockup.html_content)
+                filename = generate_export_filename(
+                    mockup.project.name,
+                    str(mockup.id),
+                    file_extension='png'
+                )
+                url = upload_to_s3(png_data, filename, settings.S3_BUCKET_NAME, file_extension='png')
+                mockup.image = url
+                mockup.save()
+            except Exception as e:
+                logger.error(f"Failed to generate image for mockup {mockup.id}: {str(e)}")
+                continue
+
+        return {"success": True, "message": "Image generation completed"}
+    except Exception as e:
+        logger.error(f"Error in generate_mockup_images_task: {str(e)}")
+        return {"error": f"Error generating images: {str(e)}"}
