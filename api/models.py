@@ -169,8 +169,6 @@ class Project(models.Model):
     status = models.CharField(
         max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT,
     )
-
-    # Add project-level generation progress fields
     requirements_total = models.IntegerField(default=0)
     requirements_completed = models.IntegerField(default=0)
     user_stories_total = models.IntegerField(default=0)
@@ -362,7 +360,6 @@ class UmlDiagram(models.Model):
     name = models.CharField(max_length=200)
     diagram_type = models.CharField(max_length=50, choices=UML_DIAGRAM_TYPE_CHOICES, default=UML_DIAGRAM_TYPE_CLASS)
     content = models.TextField()
-    # url = models.URLField(default="", blank=True)
     notes = models.TextField(blank=True)
     generation_status = models.CharField(
         max_length=20, choices=GENERATION_STATUS_CHOICES, default=GENERATION_STATUS_PENDING
@@ -395,6 +392,7 @@ class Mockup(models.Model):
     )
     name = models.CharField(max_length=200)
     html_content = models.TextField(blank=True)
+    image = models.URLField(default="https://placehold.co/1600x500/EEE/31343C")
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     version_number = models.IntegerField(default=1)
     generation_status = models.CharField(
@@ -443,3 +441,4 @@ class SrsExport(models.Model):
 
     def __str__(self):
         return f"Export for {self.project.name}"
+
