@@ -158,6 +158,8 @@ def generate_requirements_task(project_id, user_id=None):
                 version_number=1
             )
 
+            generate_user_stories_task.delay(str(project.id), requirement_id=str(new_req.id), user_id=str(user.id) if user else None)
+
             RequirementHistory.objects.create(
                 requirement=new_req,
                 title=new_req.title,
@@ -182,7 +184,6 @@ def generate_requirements_task(project_id, user_id=None):
         project.generation_completed_at = timezone.now()
         project.save()
         project.update_generation_progress()
-        generate_user_stories_task.delay(str(project.id), user_id=str(user.id) if user else None)
 
         return {"success": True, "requirements_count": len(new_requirements)}
     except Exception as e:
