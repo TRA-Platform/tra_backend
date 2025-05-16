@@ -86,6 +86,10 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return base_queryset
         
         user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+        print(user_projects)
+        print(u)
+        print(base_queryset.filter(id__in=list(user_projects)))
+        print(base_queryset.filter(created_by=u))
         return (base_queryset.filter(id__in=list(user_projects)) | 
                 base_queryset.filter(created_by=u))
 
