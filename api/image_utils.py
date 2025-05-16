@@ -133,7 +133,7 @@ async def _render_html_to_png_async(html_content, width=1200, height=800):
             )
             page = await context.new_page()
             await page.set_content(processed_html)
-            await page.wait_for_load_state('networkidle')
+            await page.wait_for_load_state('networkidle', timeout=100000)
             screenshot = await page.screenshot(
                 type='png',
                 full_page=True,

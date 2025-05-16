@@ -157,8 +157,8 @@ def generate_requirements_task(project_id, user_id=None):
                 status=STATUS_DRAFT,
                 version_number=1
             )
-
-            generate_user_stories_task.delay(str(project.id), requirement_id=str(new_req.id), user_id=str(user.id) if user else None)
+            if category == REQUIREMENT_CATEGORY_FUNCTIONAL:
+                generate_user_stories_task.delay(str(project.id), requirement_id=str(new_req.id), user_id=str(user.id) if user else None)
 
             RequirementHistory.objects.create(
                 requirement=new_req,
@@ -966,6 +966,7 @@ def generate_development_plan_task(project_id, user_id=None):
             "    {\n"
             "      \"role\": \"Role title (e.g., Senior Developer)\",\n"
             "      \"hours\": Number of hours,\n"
+            "      \"rate\": Hourly rate,\n"
             "      \"cost\": Hourly rate * hours\n"
             "    },\n"
             "    ...\n"
@@ -1574,8 +1575,10 @@ def generate_mockup_images_task(mockup_id=None, project_id=None):
 
         for mockup in mockups:
             if not mockup.html_content:
+                logger.error(f"generate_mockup_images_task: {mockup.id} - no html")
                 continue
             if mockup.image and not mockup.image.startswith("https://placehold.co") and mockup.image != "":
+                logger.error(f"generate_mockup_images_task: {mockup.id} - image issue")
                 continue
             try:
                 png_data = render_html_to_png(mockup.html_content)
