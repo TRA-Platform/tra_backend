@@ -24,3 +24,4 @@ urlpatterns = [
     path(f'api/v1/auth/', include('webauth.urls')),
     path(f'api/v1/gpt/', include('gpt.urls')),
 ]
+urlpatterns += [path('silk/', include('silk.urls', namespace='silk'))]

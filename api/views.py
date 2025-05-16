@@ -58,12 +58,15 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 'srs_template', 
                 'development_plan'
             ).prefetch_related(
-                'requirements__user_stories',
-                'requirements__mockups',
+                'requirements__parent',
+                'requirements__children',
+                'requirements__user_stories__history__changed_by',
+                'requirements__user_stories__comments__user',
+                'requirements__user_stories__mockups',
+                'requirements__mockups__created_by',
+                'requirements__history__changed_by',
                 'requirements__comments__user',
                 'requirements__comments__responsible_user',
-                'requirements__children',
-                'requirements__parent',
                 'mockups__requirement',
                 'mockups__user_story',
                 'mockups__created_by',
@@ -71,6 +74,8 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 'exports__created_by',
                 'exports__template',
                 'roles__user',
+                'roles__role',
+                'development_plan__versions'
             )
         
         if u.is_superuser or AdminPermission().has_permission(self.request, self):
@@ -81,7 +86,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return base_queryset
         
         user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
-        return (base_queryset.filter(id__in=list(user_projects)) |
+        return (base_queryset.filter(id__in=list(user_projects)) | 
                 base_queryset.filter(created_by=u))
 
     def get_serializer_class(self):
@@ -156,7 +161,17 @@ class RequirementViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'description', 'category', 'requirement_type', 'status']
 
     def get_queryset(self):
-        queryset = Requirement.objects.select_related('project', 'parent').all()
+        queryset = Requirement.objects.select_related('project', 'parent').prefetch_related(
+            'user_stories__history__changed_by',
+            'user_stories__comments__user',
+            'user_stories__mockups',
+            'history__changed_by',
+            'comments__user',
+            'comments__responsible_user',
+            'children',
+            'mockups'
+        )
+        
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
@@ -238,7 +253,15 @@ class UserStoryViewSet(viewsets.ModelViewSet):
     search_fields = ['role', 'action', 'benefit', 'status']
 
     def get_queryset(self):
-        queryset = UserStory.objects.select_related('requirement', 'requirement__project').prefetch_related('comments', 'comments__user').all()
+        queryset = UserStory.objects.select_related(
+            'requirement', 
+            'requirement__project'
+        ).prefetch_related(
+            'comments__user', 
+            'history__changed_by',
+            'mockups'
+        )
+        
         requirement_id = self.request.query_params.get('requirement', None)
         if requirement_id:
             queryset = queryset.filter(requirement_id=requirement_id)
