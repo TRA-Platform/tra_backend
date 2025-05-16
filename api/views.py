@@ -156,7 +156,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     def generate_uml_diagrams(self, request, pk=None):
         p = self.get_object()
         diagram_type = request.data.get("diagram_type", None)
-        if diagram_type:
+        if diagram_type and diagram_type != "all":
             diagram_types = [diagram_type]
         else:
             diagram_types = [dt[0] for dt in UML_DIAGRAM_TYPE_CHOICES]
@@ -734,6 +734,28 @@ def get_optimized_project_data(project_id, user):
             },
             'role': r.role,
         } for r in roles],
+        'generation_progress': {
+            'requirements': {
+                'total': project.requirements_total,
+                'completed': project.requirements_completed,
+                'status': project.generation_status,
+                'started_at': to_timestamp(project.generation_started_at),
+                'completed_at': to_timestamp(project.generation_completed_at),
+                'error': project.generation_error,
+            },
+            'user_stories': {
+                'total': project.user_stories_total,
+                'completed': project.user_stories_completed,
+            },
+            'mockups': {
+                'total': project.mockups_total,
+                'completed': project.mockups_completed,
+            },
+            'uml_diagrams': {
+                'total': project.uml_diagrams_total,
+                'completed': project.uml_diagrams_completed,
+            }
+        }
     }
 
     return project_data
