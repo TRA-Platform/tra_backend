@@ -74,7 +74,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
                 'exports__created_by',
                 'exports__template',
                 'roles__user',
-                'roles__role',
                 'development_plan__versions'
             )
         
