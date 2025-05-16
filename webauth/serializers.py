@@ -8,11 +8,11 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import authenticate
 
 from rest_framework.authtoken.models import Token
-from webauth.models import AdminMember, ManagerMember, ModeratorMember
+from webauth.models import AdminMember, ManagerMember, ModeratorMember, ProjectRole
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(required=True)
-    password = serializers.CharField(required=True)
+    password = serializers.CharField(required=True, validators=[validate_password])
     password2 = serializers.CharField(required=True)
 
     def validate_old_password(self, value):
@@ -21,10 +21,10 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError('Old password is not correct')
         return value
 
-    def validate(self, data):
-        if data['password'] != data['password2']:
-            raise serializers.ValidationError({'password2': 'Passwords must match.'})
-        return data
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password2']:
+            raise serializers.ValidationError({"password": "Password fields didn't match."})
+        return attrs
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -46,50 +46,33 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
 
     @classmethod
     def get_token(cls, user):
-        token = super(MyTokenObtainPairSerializer, cls).get_token(user)
+        token = super().get_token(user)
         token['username'] = user.username
-
-        # Default role is "user" (role=1)
-        token['role'] = 1
-
-        # If Admin
+        token['email'] = user.email
         if hasattr(user, 'admin'):
-            token['role'] = 9
-
-        # If Manager
-        if hasattr(user, 'manager'):
-            token['role'] = 2
-
-        # If Moderator
-        if hasattr(user, 'moderator'):
-            token['role'] = 3
+            token['role'] = AdminMember.ROLE_ID
+        elif hasattr(user, 'manager'):
+            token['role'] = ManagerMember.ROLE_ID
+        elif hasattr(user, 'moderator'):
+            token['role'] = ModeratorMember.ROLE_ID
+        else:
+            token['role'] = None
 
         return token
 
 
 class RegisterSerializer(serializers.ModelSerializer):
-    email = serializers.EmailField(
-        required=True,
-        validators=[UniqueValidator(queryset=User.objects.all())]
-    )
-
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     password2 = serializers.CharField(write_only=True, required=True)
-    access = serializers.SerializerMethodField(read_only=True)
-    refresh = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
-        fields = ('username', 'password', 'password2', 'email', "access", "refresh")
-
-    def get_refresh(self, obj):
-        token = MyTokenObtainPairSerializer.get_token(obj)
-        return str(token)
-
-    def get_access(self, obj):
-        token = MyTokenObtainPairSerializer.get_token(obj)
-        access_token = token.access_token
-        return str(access_token)
+        fields = ('username', 'password', 'password2', 'email', 'first_name', 'last_name')
+        extra_kwargs = {
+            'first_name': {'required': True},
+            'last_name': {'required': True},
+            'email': {'required': True}
+        }
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
@@ -97,32 +80,23 @@ class RegisterSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        user = User.objects.create(
-            username=validated_data['username'],
-            email=validated_data['email'],
-        )
-        user.set_password(validated_data['password'])
-        user.save()
+        validated_data.pop('password2')
+        user = User.objects.create_user(**validated_data)
         return user
 
 
 class RegisterAdminSerializer(serializers.ModelSerializer):
-    email = serializers.EmailField(
-        required=True,
-        validators=[UniqueValidator(queryset=User.objects.all())]
-    )
-
-    first_name = serializers.CharField(write_only=True, required=True)
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     password2 = serializers.CharField(write_only=True, required=True)
-    controlled_teams = serializers.ListField(
-        child=serializers.IntegerField(),  # Example usage if you have team IDs
-        required=False
-    )
 
     class Meta:
         model = User
-        fields = ('username', 'first_name', 'password', 'password2', 'email', 'controlled_teams')
+        fields = ('username', 'password', 'password2', 'email', 'first_name', 'last_name')
+        extra_kwargs = {
+            'first_name': {'required': True},
+            'last_name': {'required': True},
+            'email': {'required': True}
+        }
 
     def validate(self, attrs):
         if attrs['password'] != attrs['password2']:
@@ -130,22 +104,62 @@ class RegisterAdminSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        with transaction.atomic():
-            teams_data = validated_data.pop('controlled_teams', [])
-            user = User.objects.create(
-                first_name=validated_data['first_name'],
-                username=validated_data['username'],
-                email=validated_data['email'],
-            )
-            user.set_password(validated_data['password'])
-            user.save()
-
-            admin = AdminMember.objects.create(user=user)
-            admin.save()
-            return user
+        validated_data.pop('password2')
+        user = User.objects.create_user(**validated_data)
+        AdminMember.objects.create(user=user)
+        return user
 
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = get_user_model()
         fields = ('id', 'username')
+
+
+class ProjectRoleSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    email = serializers.CharField(source='user.email', read_only=True)
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+    user_id = serializers.IntegerField(write_only=True, required=False)
+    user_email = serializers.EmailField(write_only=True, required=False)
+
+    class Meta:
+        model = ProjectRole
+        fields = ('id', 'username', 'email', 'first_name', 'last_name', 'role', 'user_id', 'user_email', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_at', 'updated_at')
+
+    def validate(self, attrs):
+        if not self.instance and 'user_id' not in attrs and 'user_email' not in attrs:
+            raise serializers.ValidationError("Either user_id or user_email must be provided")
+        if 'role' in attrs and attrs['role'] not in dict(ProjectRole.ROLE_CHOICES).keys():
+            raise serializers.ValidationError({"role": f"Invalid role choice. Must be one of {dict(ProjectRole.ROLE_CHOICES).keys()}"})
+        
+        return attrs
+
+    def create(self, validated_data):
+        user = None
+        if 'user_id' in validated_data:
+            user_id = validated_data.pop('user_id')
+            try:
+                user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                raise serializers.ValidationError({"user_id": "User with this ID does not exist"})
+        
+        if not user and 'user_email' in validated_data:
+            user_email = validated_data.pop('user_email')
+            try:
+                user = User.objects.get(email=user_email)
+            except User.DoesNotExist:
+                raise serializers.ValidationError({"user_email": "User with this email does not exist"})
+        
+        if not user:
+            raise serializers.ValidationError("No valid user found")
+        project_id = self.context.get('project_id')
+        existing_role = ProjectRole.objects.filter(user=user, project_id=project_id).first()
+        if existing_role:
+            raise serializers.ValidationError({"user": "User already has a role in this project"})
+        
+        validated_data['user'] = user
+        
+        return super().create(validated_data)

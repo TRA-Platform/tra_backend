@@ -8,6 +8,8 @@ from .models import (
     UmlDiagram, STATUS_ARCHIVED, UML_DIAGRAM_TYPE_CLASS, UML_DIAGRAM_TYPE_ACTIVITY, UML_DIAGRAM_TYPE_SEQUENCE,
     UML_DIAGRAM_TYPE_COMPONENT, SrsExport
 )
+from .tasks import generate_development_plan_task
+from webauth.serializers import ProjectRoleSerializer
 
 
 class SrsTemplateSerializer(serializers.ModelSerializer):
@@ -113,7 +115,7 @@ class UserStorySerializer(serializers.ModelSerializer):
         mockups = Mockup.objects.filter(
             user_story=obj,
         ).exclude(status=STATUS_ARCHIVED)
-        return MockupSerializer(mockups, many=True).data
+        return MockupSerializerShort(mockups, many=True).data
 
 
 class MockupHistorySerializer(serializers.ModelSerializer):
@@ -238,7 +240,7 @@ class RequirementDetailSerializer(serializers.ModelSerializer):
     history = RequirementHistorySerializer(many=True, read_only=True)
     comments = RequirementCommentSerializer(many=True, read_only=True)
     user_stories = serializers.SerializerMethodField()
-    mockups = MockupSerializer(many=True, read_only=True)
+    mockups = MockupSerializerShort(many=True, read_only=True)
     parent = serializers.SerializerMethodField()
     children = serializers.SerializerMethodField()
 
@@ -347,7 +349,12 @@ class DevelopmentPlanSerializer(serializers.ModelSerializer):
             "id", "project", "current_version_number", "hourly_rates",
             "status", "created_at", "updated_at", "versions"
         )
-        read_only_fields = ("id", "current_version_number", "created_at", "updated_at", "versions")
+        read_only_fields = ("id", "created_at", "updated_at", "versions")
+    
+    def create(self, validated_data):
+        validated_data["created_by"] = self.context["request"].user
+        generate_development_plan_task.delay(str(validated_data["project"].id), user_id=str(self.context["request"].user.id))
+        return super().create(validated_data)
 
 
 class ProjectListSerializer(serializers.ModelSerializer):
@@ -372,11 +379,12 @@ class ProjectSerializer(serializers.ModelSerializer):
     created_by = UserSerializer(read_only=True)
     requirements = RequirementDetailSerializer(many=True, read_only=True)
     mockups = serializers.SerializerMethodField()
-    development_plan = DevelopmentPlanSerializer(read_only=True)
     uml_diagrams = UmlDiagramSerializer(many=True, read_only=True)
+    development_plan = DevelopmentPlanSerializer(read_only=True)
     user_stories = serializers.SerializerMethodField()
     generation_progress = serializers.SerializerMethodField()
     srs_exports = serializers.SerializerMethodField()
+    roles = ProjectRoleSerializer(many=True, read_only=True)
     requirements_total = serializers.IntegerField(read_only=True)
     requirements_completed = serializers.IntegerField(read_only=True)
     user_stories_total = serializers.IntegerField(read_only=True)
@@ -389,7 +397,7 @@ class ProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = Project
         fields = (
-            "id", "created_by", "name", "short_description", "srs_template",
+            "id", "created_by", "name", "short_description",
             "type_of_application", "color_scheme", "language",
             "application_description", "target_users", "additional_requirements",
             "non_functional_requirements", "technology_stack", "operating_systems",
@@ -403,6 +411,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             "user_stories_total", "user_stories_completed",
             "mockups_total", "mockups_completed",
             "uml_diagrams_total", "uml_diagrams_completed",
+            "roles",
         )
         read_only_fields = (
             "id", "created_by", "created_at", "updated_at", "requirements",
@@ -430,14 +439,6 @@ class ProjectSerializer(serializers.ModelSerializer):
         )
         return UserStorySerializer(user_stories, many=True).data
 
-    def get_mockups(self, obj):
-        mockups = Mockup.objects.filter(
-            project=obj,
-        ).exclude(
-            status=STATUS_ARCHIVED
-        )
-        return MockupSerializerShort(mockups, many=True).data
-
     def get_generation_progress(self, obj):
         return {
             "requirements": {
@@ -461,3 +462,11 @@ class ProjectSerializer(serializers.ModelSerializer):
                 "completed": obj.uml_diagrams_completed
             }
         }
+
+    def get_mockups(self, obj):
+        mockups = Mockup.objects.filter(
+            project=obj,
+        ).exclude(
+            status=STATUS_ARCHIVED
+        )
+        return MockupSerializerShort(mockups, many=True).data

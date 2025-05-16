@@ -4,13 +4,14 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from webauth.permissions import AdminPermission, ManagerPermission, ModeratorPermission
+from webauth.permissions import AdminPermission, ManagerPermission, ModeratorPermission, ProjectPermission
 from .models import (
     SrsTemplate, Project, Requirement, RequirementComment,
     DevelopmentPlan, DevelopmentPlanVersion, Mockup, MockupHistory,
     UserStory, UserStoryComment, UserStoryHistory, UmlDiagram, UML_DIAGRAM_TYPE_CHOICES, SRS_FORMAT_PDF,
     SRS_FORMAT_MARKDOWN, RequirementHistory, GENERATION_STATUS_PENDING, STATUS_ACTIVE
 )
+from webauth.models import ProjectRole
 from .serializers import (
     SrsTemplateSerializer, ProjectSerializer, RequirementSerializer, RequirementCommentSerializer,
     DevelopmentPlanSerializer, DevelopmentPlanVersionSerializer, MockupSerializer,
@@ -26,7 +27,7 @@ from .tasks import (
 class SrsTemplateViewSet(viewsets.ModelViewSet):
     queryset = SrsTemplate.objects.all()
     serializer_class = SrsTemplateSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'description', 'tags']
 
@@ -39,7 +40,7 @@ class SrsTemplateViewSet(viewsets.ModelViewSet):
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'short_description', 'type_of_application', 'status']
 
@@ -51,7 +52,9 @@ class ProjectViewSet(viewsets.ModelViewSet):
             return Project.objects.all()
         if ModeratorPermission().has_permission(self.request, self):
             return Project.objects.all()
-        return Project.objects.filter(created_by=u)
+        
+        user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+        return Project.objects.filter(id__in=list(user_projects)) | Project.objects.filter(created_by=u)
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -120,7 +123,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
 class RequirementViewSet(viewsets.ModelViewSet):
     queryset = Requirement.objects.all()
     serializer_class = RequirementSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['title', 'description', 'category', 'requirement_type', 'status']
 
@@ -144,11 +147,13 @@ class RequirementViewSet(viewsets.ModelViewSet):
         status_param = self.request.query_params.get('status', None)
         if status_param:
             queryset = queryset.filter(status=status_param)
+        
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
                 ModeratorPermission().has_permission(self.request, self)):
-            queryset = queryset.filter(project__created_by=u)
+            user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+            queryset = queryset.filter(project__id__in=list(user_projects)) | queryset.filter(project__created_by=u)
 
         return queryset
 
@@ -200,7 +205,7 @@ class RequirementViewSet(viewsets.ModelViewSet):
 class UserStoryViewSet(viewsets.ModelViewSet):
     queryset = UserStory.objects.all()
     serializer_class = UserStorySerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['role', 'action', 'benefit', 'status']
 
@@ -212,11 +217,13 @@ class UserStoryViewSet(viewsets.ModelViewSet):
         status_param = self.request.query_params.get('status', None)
         if status_param:
             queryset = queryset.filter(status=status_param)
+        
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
                 ModeratorPermission().has_permission(self.request, self)):
-            queryset = queryset.filter(requirement__project__created_by=u)
+            user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+            queryset = queryset.filter(requirement__project__id__in=list(user_projects)) | queryset.filter(requirement__project__created_by=u)
 
         return queryset
 
@@ -236,18 +243,20 @@ class UserStoryViewSet(viewsets.ModelViewSet):
 class UserStoryCommentViewSet(viewsets.ModelViewSet):
     queryset = UserStoryComment.objects.all()
     serializer_class = UserStoryCommentSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = UserStoryComment.objects.all()
         user_story_id = self.request.query_params.get('user_story', None)
         if user_story_id:
             queryset = queryset.filter(user_story_id=user_story_id)
+
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
                 ModeratorPermission().has_permission(self.request, self)):
-            queryset = queryset.filter(user_story__requirement__project__created_by=u)
+            user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+            queryset = queryset.filter(user_story__requirement__project__id__in=list(user_projects)) | queryset.filter(user_story__requirement__project__created_by=u)
 
         return queryset
 
@@ -255,33 +264,41 @@ class UserStoryCommentViewSet(viewsets.ModelViewSet):
 class RequirementCommentViewSet(viewsets.ModelViewSet):
     queryset = RequirementComment.objects.all()
     serializer_class = RequirementCommentSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
+        queryset = RequirementComment.objects.all()
+        requirement_id = self.request.query_params.get('requirement', None)
+        if requirement_id:
+            queryset = queryset.filter(requirement_id=requirement_id)
+
         u = self.request.user
-        if u.is_superuser or AdminPermission().has_permission(self.request, self):
-            return RequirementComment.objects.all()
-        if ManagerPermission().has_permission(self.request, self):
-            return RequirementComment.objects.all()
-        if ModeratorPermission().has_permission(self.request, self):
-            return RequirementComment.objects.all()
-        return RequirementComment.objects.filter(requirement__project__created_by=u)
+        if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
+                ManagerPermission().has_permission(self.request, self) or
+                ModeratorPermission().has_permission(self.request, self)):
+            user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+            queryset = queryset.filter(requirement__project__id__in=list(user_projects)) | queryset.filter(requirement__project__created_by=u)
+
+        return queryset
 
 
 class DevelopmentPlanViewSet(viewsets.ModelViewSet):
     queryset = DevelopmentPlan.objects.all()
     serializer_class = DevelopmentPlanSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = DevelopmentPlan.objects.all()
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
+
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
-                ManagerPermission().has_permission(self.request, self)):
-            queryset = queryset.filter(project__created_by=u)
+                ManagerPermission().has_permission(self.request, self) or
+                ModeratorPermission().has_permission(self.request, self)):
+            user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+            queryset = queryset.filter(project__id__in=list(user_projects)) | queryset.filter(project__created_by=u)
 
         return queryset
 
@@ -316,17 +333,20 @@ class DevelopmentPlanViewSet(viewsets.ModelViewSet):
 class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
     queryset = DevelopmentPlanVersion.objects.all()
     serializer_class = DevelopmentPlanVersionSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = DevelopmentPlanVersion.objects.all()
         plan_id = self.request.query_params.get('plan', None)
         if plan_id:
             queryset = queryset.filter(plan_id=plan_id)
+
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
-                ManagerPermission().has_permission(self.request, self)):
-            queryset = queryset.filter(plan__project__created_by=u)
+                ManagerPermission().has_permission(self.request, self) or
+                ModeratorPermission().has_permission(self.request, self)):
+            user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+            queryset = queryset.filter(plan__project__id__in=list(user_projects)) | queryset.filter(plan__project__created_by=u)
 
         return queryset
 
@@ -334,7 +354,7 @@ class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
 class UmlDiagramViewSet(viewsets.ModelViewSet):
     queryset = UmlDiagram.objects.all()
     serializer_class = UmlDiagramSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = UmlDiagram.objects.all()
@@ -344,11 +364,13 @@ class UmlDiagramViewSet(viewsets.ModelViewSet):
         diagram_type = self.request.query_params.get('diagram_type', None)
         if diagram_type:
             queryset = queryset.filter(diagram_type=diagram_type)
+
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
                 ModeratorPermission().has_permission(self.request, self)):
-            queryset = queryset.filter(project__created_by=u)
+            user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+            queryset = queryset.filter(project__id__in=list(user_projects)) | queryset.filter(project__created_by=u)
 
         return queryset
 
@@ -366,7 +388,7 @@ class UmlDiagramViewSet(viewsets.ModelViewSet):
 class MockupViewSet(viewsets.ModelViewSet):
     queryset = Mockup.objects.all()
     serializer_class = MockupSerializer
-    permission_classes = [IsAuthenticated, ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
         queryset = Mockup.objects.all()
@@ -379,11 +401,13 @@ class MockupViewSet(viewsets.ModelViewSet):
         user_story_id = self.request.query_params.get('user_story', None)
         if user_story_id:
             queryset = queryset.filter(user_story_id=user_story_id)
+
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
                 ModeratorPermission().has_permission(self.request, self)):
-            queryset = queryset.filter(project__created_by=u)
+            user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
+            queryset = queryset.filter(project__id__in=list(user_projects)) | queryset.filter(project__created_by=u)
 
         return queryset
 

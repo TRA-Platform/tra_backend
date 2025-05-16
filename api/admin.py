@@ -4,6 +4,7 @@ from django.utils.html import format_html
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 
+from webauth.models import ProjectRole
 from .models import (
     SrsTemplate, Project, Requirement, RequirementHistory, UserStory,
     UserStoryHistory, UserStoryComment, RequirementComment, DevelopmentPlan,
@@ -161,6 +162,39 @@ def admin_generate_images(modeladmin, request, queryset):
         )
 
 
+@admin.action(description="Update Generation Progress")
+def admin_update_generation_progress(modeladmin, request, queryset):
+    for project in queryset:
+        project.update_generation_progress()
+        modeladmin.message_user(
+            request,
+            f"Updating Generation Progress for project '{project.name}'",
+            messages.SUCCESS
+        )
+
+@admin.action(description="Generate Project Roles for Project Owners")
+def admin_generate_project_roles(modeladmin, request, queryset):
+    for project in queryset:
+        try:
+            ProjectRole.objects.create(
+                user=project.created_by,
+                project=project,
+                role='OWNER'
+            )
+            modeladmin.message_user(
+                request,
+                f"Generated Project Role for project '{project.name}'",
+                messages.SUCCESS
+            )
+        except Exception as e:
+            modeladmin.message_user(
+                request,
+                f"Error generating Project Role for project '{project.name}': {str(e)}",
+                messages.ERROR
+            )
+
+
+
 class RequirementInline(admin.TabularInline):
     model = Requirement
     extra = 0
@@ -286,7 +320,9 @@ class ProjectAdmin(admin.ModelAdmin):
         admin_export_srs_markdown,
         admin_generate_plan,
         admin_generate_mockups,
-        admin_generate_uml_diagrams
+        admin_generate_uml_diagrams,
+        admin_update_generation_progress,
+        admin_generate_project_roles,
     ]
     save_on_top = True
 
@@ -746,6 +782,7 @@ class MockupAdmin(admin.ModelAdmin):
             f"Started image generation for {queryset.count()} mockups",
             messages.SUCCESS
         )
+
     generate_images.short_description = "Generate images for selected mockups"
 
     def get_queryset(self, request):

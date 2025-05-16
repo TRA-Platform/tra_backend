@@ -142,7 +142,7 @@ class Project(models.Model):
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='projects')
     name = models.CharField(max_length=200)
     short_description = models.TextField(blank=True)
-    srs_template = models.ForeignKey(SrsTemplate, on_delete=models.SET_NULL, null=True, blank=True)
+    srs_template = models.ForeignKey(SrsTemplate, on_delete=models.SET_NULL, null=True, blank=True, default=None)
     type_of_application = models.CharField(
         max_length=50, choices=PROJECT_TYPE_CHOICES, default=PROJECT_TYPE_WEBSITE,
     )
@@ -178,6 +178,11 @@ class Project(models.Model):
     uml_diagrams_total = models.IntegerField(default=0)
     uml_diagrams_completed = models.IntegerField(default=0)
 
+    requirements_generating = models.BooleanField(default=False)
+    user_stories_generating = models.BooleanField(default=False)
+    mockups_generating = models.BooleanField(default=False)
+    uml_diagrams_generating = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -187,8 +192,8 @@ class Project(models.Model):
     def update_generation_progress(self):
         self.requirements_total = self.requirements.count()
         self.requirements_completed = self.requirements.filter(status='completed').count()
-        self.user_stories_total = self.user_stories.count() if hasattr(self, 'user_stories') else 0
-        self.user_stories_completed = self.user_stories.filter(generation_status='completed').count() if hasattr(self, 'user_stories') else 0
+        self.user_stories_total = UserStory.objects.filter(requirement__project__id=self.id).count()
+        self.user_stories_completed = UserStory.objects.filter(requirement__project__id=self.id, generation_status=GENERATION_STATUS_COMPLETED).count()
         self.mockups_total = self.mockups.count() if hasattr(self, 'mockups') else 0
         self.mockups_completed = self.mockups.filter(generation_status='completed', needs_regeneration=False).count() if hasattr(self, 'mockups') else 0
         self.uml_diagrams_total = self.uml_diagrams.count() if hasattr(self, 'uml_diagrams') else 0
