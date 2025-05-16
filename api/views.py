@@ -47,8 +47,7 @@ class SrsTemplateViewSet(viewsets.ModelViewSet):
 class ProjectViewSet(viewsets.ModelViewSet):
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
-    permission_classes = [IsAuthenticated,
-                          ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
+    permission_classes = [IsAuthenticated, ProjectPermission]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'short_description', 'type_of_application', 'status']
 
