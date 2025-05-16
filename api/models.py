@@ -191,13 +191,24 @@ class Project(models.Model):
 
     def update_generation_progress(self):
         self.requirements_total = self.requirements.count()
-        self.requirements_completed = self.requirements.filter(status='completed').count()
+        self.requirements_completed = self.requirements.filter(status=STATUS_COMPLETED).count()
         self.user_stories_total = UserStory.objects.filter(requirement__project__id=self.id).count()
-        self.user_stories_completed = UserStory.objects.filter(requirement__project__id=self.id, generation_status=GENERATION_STATUS_COMPLETED).count()
+        self.user_stories_completed = UserStory.objects.filter(
+            requirement__project__id=self.id, 
+            generation_status=GENERATION_STATUS_COMPLETED,
+        ).count()
+        
         self.mockups_total = self.mockups.count() if hasattr(self, 'mockups') else 0
-        self.mockups_completed = self.mockups.filter(generation_status='completed', needs_regeneration=False).count() if hasattr(self, 'mockups') else 0
+        self.mockups_completed = self.mockups.filter(
+            generation_status=GENERATION_STATUS_COMPLETED,
+            needs_regeneration=False
+        ).count() if hasattr(self, 'mockups') else 0
+        
         self.uml_diagrams_total = self.uml_diagrams.count() if hasattr(self, 'uml_diagrams') else 0
-        self.uml_diagrams_completed = self.uml_diagrams.filter(generation_status='completed').count() if hasattr(self, 'uml_diagrams') else 0
+        self.uml_diagrams_completed = self.uml_diagrams.filter(
+            generation_status=GENERATION_STATUS_COMPLETED,
+        ).count() if hasattr(self, 'uml_diagrams') else 0
+        
         self.save()
 
 
@@ -434,7 +445,7 @@ class MockupHistory(models.Model):
 class SrsExport(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT,
+        max_length=20, choices=GENERATION_STATUS_CHOICES, default=GENERATION_STATUS_PENDING,
     )
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='exports')
     template = models.ForeignKey(SrsTemplate, on_delete=models.SET_NULL, null=True, blank=True)

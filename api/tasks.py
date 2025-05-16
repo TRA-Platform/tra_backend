@@ -377,7 +377,7 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
         template=project.srs_template,
         fmt=fmt,
         created_by=creator,
-        status=STATUS_ACTIVE,
+        status=GENERATION_STATUS_IN_PROGRESS,
     )
 
     requirements = project.requirements.filter(status__in=[STATUS_ACTIVE, STATUS_DRAFT])
@@ -398,7 +398,8 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
 
         url = upload_to_s3(content, filename, settings.S3_BUCKET_NAME, fmt)
         export.url = url
-        export.content = md_content
+        # export.content = md_content
+        export.status = GENERATION_STATUS_COMPLETED
         export.save()
 
         return {
@@ -409,7 +410,7 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
         }
     except Exception as e:
         logger.error(f"Failed to process export: {str(e)}")
-        export.status = STATUS_ARCHIVED
+        export.status = GENERATION_STATUS_FAILED
         export.save()
         return {"error": f"Failed to process export: {str(e)}"}
 
@@ -1000,11 +1001,13 @@ def generate_development_plan_task(project_id, user_id=None):
             role = item.get("role", "")
             hours = float(item.get("hours", 0))
             cost = float(item.get("cost", 0))
+            rate = float(item.get("rate", 0))
 
             formatted_item = {
                 "role": role,
                 "hours": hours,
-                "cost": cost
+                "cost": hours * rate,
+                "rate": rate,
             }
             formatted_roles_hours.append(formatted_item)
             total_cost += cost
