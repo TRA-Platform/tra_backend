@@ -9,7 +9,7 @@ from .models import (
     SrsTemplate, Project, Requirement, RequirementComment,
     DevelopmentPlan, DevelopmentPlanVersion, Mockup, MockupHistory,
     UserStory, UserStoryComment, UserStoryHistory, UmlDiagram, UML_DIAGRAM_TYPE_CHOICES, SRS_FORMAT_PDF,
-    SRS_FORMAT_MARKDOWN, RequirementHistory, GENERATION_STATUS_PENDING, STATUS_ACTIVE
+    SRS_FORMAT_MARKDOWN, RequirementHistory, GENERATION_STATUS_PENDING, STATUS_ACTIVE, GENERATION_STATUS_IN_PROGRESS
 )
 from webauth.models import ProjectRole
 from .serializers import (
@@ -64,7 +64,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def generate_requirements(self, request, pk=None):
         p = self.get_object()
-        p.generation_status = "in_progress"
+        p.generation_status = GENERATION_STATUS_IN_PROGRESS
         p.generation_started_at = timezone.now()
         p.save()
 

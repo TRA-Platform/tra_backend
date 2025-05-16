@@ -434,7 +434,7 @@ class MockupHistory(models.Model):
 class SrsExport(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     status = models.CharField(
-        max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT,
+        max_length=20, choices=GENERATION_STATUS_CHOICES, default=GENERATION_STATUS_PENDING,
     )
     project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='exports')
     template = models.ForeignKey(SrsTemplate, on_delete=models.SET_NULL, null=True, blank=True)
