@@ -173,12 +173,12 @@ class MockupSerializer(serializers.ModelSerializer):
         ]
 
     def get_requirement_name(self, obj):
-        if obj.requirement:
+        if obj.requirement_id:
             return obj.requirement.title
         return None
 
     def get_user_story_name(self, obj):
-        if obj.user_story:
+        if obj.user_story_id:
             return str(obj.user_story)
         return None
 
@@ -255,7 +255,10 @@ class RequirementDetailSerializer(serializers.ModelSerializer):
                             "history", "comments", "user_stories", "mockups", "handle")
 
     def get_user_stories(self, obj):
-        user_stories = [story for story in obj.user_stories.all() if story.status != STATUS_ARCHIVED]
+        from .models import STATUS_ARCHIVED
+        user_stories = obj.user_stories.exclude(status=STATUS_ARCHIVED).prefetch_related(
+            'history', 'comments', 'mockups'
+        ).all()
         return UserStorySerializer(user_stories, many=True).data
 
     def get_parent(self, obj):
@@ -426,14 +429,25 @@ class ProjectSerializer(serializers.ModelSerializer):
         return project
 
     def get_srs_exports(self, obj):
-        return SrsExportSerializer(obj.exports.all(), many=True).data
+        exports = obj.exports.select_related('created_by', 'template').all()
+        return SrsExportSerializer(exports, many=True).data
 
     def get_user_stories(self, obj):
+        from django.db.models import Prefetch
+        from .models import UserStory, STATUS_ARCHIVED
+        requirements = obj.requirements.prefetch_related(
+            Prefetch(
+                'user_stories',
+                queryset=UserStory.objects.exclude(status=STATUS_ARCHIVED).prefetch_related(
+                    'history', 'comments', 'mockups'
+                ),
+                to_attr='prefetched_user_stories'
+            )
+        ).all()
         all_stories = []
-        for req in obj.requirements.all():
-            for story in req.user_stories.all():
-                if story.status != STATUS_ARCHIVED:
-                    all_stories.append(story)
+        for req in requirements:
+            all_stories.extend(req.prefetched_user_stories)
+            
         return UserStorySerializer(all_stories, many=True).data
 
     def get_generation_progress(self, obj):
@@ -461,5 +475,6 @@ class ProjectSerializer(serializers.ModelSerializer):
         }
 
     def get_mockups(self, obj):
-        mockups = [m for m in obj.mockups.all() if m.status != STATUS_ARCHIVED]
+        from .models import STATUS_ARCHIVED
+        mockups = obj.mockups.exclude(status=STATUS_ARCHIVED).all()
         return MockupSerializerShort(mockups, many=True).data
