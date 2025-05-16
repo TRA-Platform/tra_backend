@@ -255,9 +255,7 @@ class RequirementDetailSerializer(serializers.ModelSerializer):
                             "history", "comments", "user_stories", "mockups", "handle")
 
     def get_user_stories(self, obj):
-        user_stories = UserStory.objects.filter(
-            requirement=obj,
-        ).exclude(status=STATUS_ARCHIVED)
+        user_stories = [story for story in obj.user_stories.all() if story.status != STATUS_ARCHIVED]
         return UserStorySerializer(user_stories, many=True).data
 
     def get_parent(self, obj):
@@ -428,16 +426,15 @@ class ProjectSerializer(serializers.ModelSerializer):
         return project
 
     def get_srs_exports(self, obj):
-        srs_exports = SrsExport.objects.filter(project=obj)
-        return SrsExportSerializer(srs_exports, many=True).data
+        return SrsExportSerializer(obj.exports.all(), many=True).data
 
     def get_user_stories(self, obj):
-        user_stories = UserStory.objects.filter(
-            requirement__project=obj,
-        ).exclude(
-            status=STATUS_ARCHIVED,
-        )
-        return UserStorySerializer(user_stories, many=True).data
+        all_stories = []
+        for req in obj.requirements.all():
+            for story in req.user_stories.all():
+                if story.status != STATUS_ARCHIVED:
+                    all_stories.append(story)
+        return UserStorySerializer(all_stories, many=True).data
 
     def get_generation_progress(self, obj):
         return {
@@ -464,9 +461,5 @@ class ProjectSerializer(serializers.ModelSerializer):
         }
 
     def get_mockups(self, obj):
-        mockups = Mockup.objects.filter(
-            project=obj,
-        ).exclude(
-            status=STATUS_ARCHIVED
-        )
+        mockups = [m for m in obj.mockups.all() if m.status != STATUS_ARCHIVED]
         return MockupSerializerShort(mockups, many=True).data

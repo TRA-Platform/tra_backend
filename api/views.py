@@ -30,6 +30,9 @@ class SrsTemplateViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'description', 'tags']
+    
+    def get_queryset(self):
+        return SrsTemplate.objects.all()
 
     @action(detail=True, methods=["get"])
     def preview(self, request, pk=None):
@@ -46,15 +49,40 @@ class ProjectViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         u = self.request.user
+        
+        if self.action == "list":
+            base_queryset = Project.objects.select_related('created_by')
+        else:
+            base_queryset = Project.objects.select_related(
+                'created_by', 
+                'srs_template', 
+                'development_plan'
+            ).prefetch_related(
+                'requirements__user_stories',
+                'requirements__mockups',
+                'requirements__comments__user',
+                'requirements__comments__responsible_user',
+                'requirements__children',
+                'requirements__parent',
+                'mockups__requirement',
+                'mockups__user_story',
+                'mockups__created_by',
+                'uml_diagrams__plan_version',
+                'exports__created_by',
+                'exports__template',
+                'roles__user',
+            )
+        
         if u.is_superuser or AdminPermission().has_permission(self.request, self):
-            return Project.objects.all()
+            return base_queryset
         if ManagerPermission().has_permission(self.request, self):
-            return Project.objects.all()
+            return base_queryset
         if ModeratorPermission().has_permission(self.request, self):
-            return Project.objects.all()
+            return base_queryset
         
         user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
-        return Project.objects.filter(id__in=list(user_projects)) | Project.objects.filter(created_by=u)
+        return (base_queryset.filter(id__in=list(user_projects)) |
+                base_queryset.filter(created_by=u))
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -128,7 +156,7 @@ class RequirementViewSet(viewsets.ModelViewSet):
     search_fields = ['title', 'description', 'category', 'requirement_type', 'status']
 
     def get_queryset(self):
-        queryset = Requirement.objects.all()
+        queryset = Requirement.objects.select_related('project', 'parent').all()
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
@@ -210,7 +238,7 @@ class UserStoryViewSet(viewsets.ModelViewSet):
     search_fields = ['role', 'action', 'benefit', 'status']
 
     def get_queryset(self):
-        queryset = UserStory.objects.all()
+        queryset = UserStory.objects.select_related('requirement', 'requirement__project').prefetch_related('comments', 'comments__user').all()
         requirement_id = self.request.query_params.get('requirement', None)
         if requirement_id:
             queryset = queryset.filter(requirement_id=requirement_id)
@@ -246,18 +274,18 @@ class UserStoryCommentViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
-        queryset = UserStoryComment.objects.all()
+        queryset = UserStoryComment.objects.select_related('user_story', 'user', 'user_story__requirement', 'user_story__requirement__project').all()
         user_story_id = self.request.query_params.get('user_story', None)
         if user_story_id:
             queryset = queryset.filter(user_story_id=user_story_id)
-
+        
         u = self.request.user
         if not (u.is_superuser or AdminPermission().has_permission(self.request, self) or
                 ManagerPermission().has_permission(self.request, self) or
                 ModeratorPermission().has_permission(self.request, self)):
             user_projects = ProjectRole.objects.filter(user=u).values_list('project_id', flat=True)
             queryset = queryset.filter(user_story__requirement__project__id__in=list(user_projects)) | queryset.filter(user_story__requirement__project__created_by=u)
-
+        
         return queryset
 
 
@@ -267,7 +295,7 @@ class RequirementCommentViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
-        queryset = RequirementComment.objects.all()
+        queryset = RequirementComment.objects.select_related('requirement', 'user', 'responsible_user', 'requirement__project').all()
         requirement_id = self.request.query_params.get('requirement', None)
         if requirement_id:
             queryset = queryset.filter(requirement_id=requirement_id)
@@ -288,7 +316,7 @@ class DevelopmentPlanViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
-        queryset = DevelopmentPlan.objects.all()
+        queryset = DevelopmentPlan.objects.select_related('project', 'project__created_by').prefetch_related('versions').all()
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
@@ -336,7 +364,7 @@ class DevelopmentPlanVersionViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
-        queryset = DevelopmentPlanVersion.objects.all()
+        queryset = DevelopmentPlanVersion.objects.select_related('plan', 'plan__project', 'created_by').prefetch_related('uml_diagrams').all()
         plan_id = self.request.query_params.get('plan', None)
         if plan_id:
             queryset = queryset.filter(plan_id=plan_id)
@@ -357,7 +385,7 @@ class UmlDiagramViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
-        queryset = UmlDiagram.objects.all()
+        queryset = UmlDiagram.objects.select_related('project', 'plan_version').all()
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)
@@ -391,7 +419,7 @@ class MockupViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, ProjectPermission | ModeratorPermission | ManagerPermission | AdminPermission]
 
     def get_queryset(self):
-        queryset = Mockup.objects.all()
+        queryset = Mockup.objects.select_related('project', 'requirement', 'user_story', 'created_by').all()
         project_id = self.request.query_params.get('project', None)
         if project_id:
             queryset = queryset.filter(project_id=project_id)

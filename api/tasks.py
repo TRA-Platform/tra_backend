@@ -398,7 +398,7 @@ def export_srs_task(project_id, created_by=None, fmt="pdf"):
 
         url = upload_to_s3(content, filename, settings.S3_BUCKET_NAME, fmt)
         export.url = url
-        export.content = md_content
+        # export.content = md_content
         export.status = GENERATION_STATUS_COMPLETED
         export.save()
 
