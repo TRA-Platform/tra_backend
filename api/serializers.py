@@ -173,13 +173,13 @@ class MockupSerializer(serializers.ModelSerializer):
         ]
 
     def get_requirement_name(self, obj):
-        if obj.requirement:
+        if obj.requirement_id:
             return obj.requirement.title
         return None
 
     def get_user_story_name(self, obj):
         if obj.user_story_id:
-            return obj.user_story.name
+            return str(obj.user_story)
         return None
 
 class MockupSerializerShort(serializers.ModelSerializer):
